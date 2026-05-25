@@ -340,8 +340,6 @@ Configurable via environment variables:
 * ✅ Structured logging + CORS + input validation
 
 ## 🧩 TODO (Roadmap)
-* [ ] LLM: Handling tokenization differences, latency variations & fallback mechanisms
-* [ ] Embeddings/Search: Hybrid Search (semantic + keyword BM25) + Query Rewriting Node + Token optimization / Cost Tracking
 * [ ] Evaluation (RAGAS)
 
 ## ⚡ Tech Stack
