@@ -17,6 +17,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Every write to Redis gets saved to a file on disk immediately. If the container restarts, Redis replays that file and recovers all data.
+    command: redis-server --appendonly yes
     ports:
       - "6379:6379"
     volumes:
