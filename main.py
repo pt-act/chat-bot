@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from config import get_settings
 from controllers.chat_controller import router as chat_router
 from controllers.ingest_controller import router as ingest_router
+from middlewares.rate_limiter import RateLimitMiddleware
 from db.redis_client import get_redis
 from db.vector import get_vectorstore
 
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Chatbot API", version="1.0.0", lifespan=lifespan)
 
+app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

@@ -68,26 +68,26 @@ Response to User
 
 ```
 chat-bot/
-├── api/                  # FastAPI routers (chat, ingest)
-├── controllers/          # Route handler logic
-├── core/                 # Middleware (rate limiting, logging, request ID)
+├── controllers/          # Route handler logic (chat, ingest endpoints)
+├── middlewares/          # Rate limiting middleware
 ├── db/                   # Redis and ChromaDB clients
 ├── graph/
 │   ├── builder.py        # LangGraph pipeline definition
 │   └── nodes/            # Individual graph nodes (load_memory, retrieve_context, generate_answer, summarize, store_memory)
-├── ingest/               # Document download and chunking logic
+├── ingest/               # Incremental document ingestion pipeline
 ├── prompts/
 │   ├── answer.py         # Answer generation prompt
 │   └── summarize.py      # Conversation summarization prompt
 ├── schemas/
 │   ├── chat.py           # ChatRequest schema
 │   └── ingest.py         # IngestRequest schema
-├── services/             # Business logic (chat, ingest)
-├── utils/                # LLM and embedding adapters
+├── tests/                # Pytest test suite (ingest pipeline)
 ├── main.py               # App entrypoint
 ├── config.py             # Settings (pydantic-settings)
-├── docker-compose.yml
-└── requirements.txt
+├── pytest.ini            # Test configuration
+├── requirements.txt
+├── requirements-dev.txt  # Test dependencies (pytest, fakeredis, responses, fpdf2)
+└── docker-compose.yml
 ```
 
 ## ⚙️ Setup Instructions
@@ -160,6 +160,8 @@ docker-compose up --build
 
 ## 📥 6. Document Ingestion (S3 → ChromaDB)
 
+### Ingest a document
+
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/ingest" \
   -H "Content-Type: application/json" \
@@ -167,6 +169,18 @@ curl -X POST "http://127.0.0.1:8000/api/ingest" \
     "file_name": "terms_conditions",
     "s3_url": "https://your-s3-url.pdf"
   }'
+```
+
+### Check ingest status
+
+```bash
+curl http://127.0.0.1:8000/api/ingest/status/terms_conditions
+```
+
+### List all ingested documents
+
+```bash
+curl http://127.0.0.1:8000/api/ingest/docs
 ```
 
 ## 💬 7. Chat API
@@ -210,11 +224,45 @@ Redis stores:
 - Running conversation summary (for long-term context)
 - TTL-based expiry (configurable via `REDIS_TTL_SECONDS`)
 
-### 🔹 RAG System
-ChromaDB:
-- Stores embedded documents
-- Retrieves top-k relevant context per query
-- SHA-256 hash-based duplicate detection
+### 🔹 RAG System — Incremental Ingestion + MMR Retrieval
+
+**Retrieval — MMR (Maximal Marginal Relevance):**
+
+Instead of returning the top-3 most similar chunks (which can be near-identical and repetitive), MMR fetches the top-10 candidates and then selects 3 that are both relevant AND diverse from each other. This means the LLM sees a broader slice of the document rather than three nearly-identical paragraphs.
+
+```
+ChromaDB.max_marginal_relevance_search(question, k=3, fetch_k=10)
+```
+
+**Ingestion — Incremental Chunk-Level Diffing:**
+
+When a document is re-uploaded, the pipeline does not delete and re-embed everything. Instead, it diffs at the chunk level using Redis:
+
+```
+1. Download PDF → compute SHA-256 file hash
+2. Compare with stored hash in Redis:
+   - Same hash → skip entirely ("file unchanged")
+   - Different hash → proceed
+3. Split into chunks → compute MD5 hash per chunk
+4. Redis set subtraction:
+     stale = old_chunk_hashes − new_chunk_hashes  → delete from ChromaDB
+     fresh = new_chunk_hashes − old_chunk_hashes  → embed and add to ChromaDB
+     unchanged chunks are skipped (no re-embedding cost)
+5. Update Redis registry with new chunk hashes
+```
+
+**Redis keys used by the ingest pipeline:**
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `ingest_status:{doc_id}` | Hash | Stores status, file hash, version, chunk count per document |
+| `doc_chunks:{doc_id}` | Set | Stores all chunk MD5 hashes for the current version |
+| `ingest:doc_ids` | Set | Global list of all ingested doc IDs |
+| `ingest:content_hashes` | Hash | Maps `file_hash → doc_id` for cross-document duplicate detection |
+
+**Global duplicate detection:**
+
+If the same PDF is uploaded under a different file name, the `ingest:content_hashes` registry catches it and returns `status: skipped` with the name of the document that already holds that content — no re-embedding, no duplicated vectors.
 
 ### 🔹 LLM Layer
 Configurable via environment variables:
@@ -225,22 +273,24 @@ Configurable via environment variables:
 
 ## 🧠 Key Features
 
-* ✅ Conversational memory (short + long-term)
-* ✅ RAG-based retrieval system
+* ✅ Conversational memory (short + long-term via Redis)
+* ✅ RAG retrieval with MMR diversity ranking (fetch 10, return 3 diverse chunks)
+* ✅ Incremental ingestion — only re-embeds changed chunks, not the whole document
+* ✅ Global duplicate detection — same PDF under different names is caught via content hash
+* ✅ Rate limiting — 60 requests/minute per IP (Redis-backed, returns 429 on breach)
 * ✅ Multi-LLM provider support (OpenAI, Anthropic, Groq)
 * ✅ Multilingual responses (Arabic / English auto-detected)
 * ✅ LangGraph workflow orchestration
-* ✅ Redis-based persistence with TTL
-* ✅ Modular backend design
+* ✅ Strict knowledge-base-only responses — refuses to answer outside ingested documents
 * ✅ FastAPI production API layer
-* ✅ Dockerized with Docker Compose
+* ✅ Dockerized with Docker Compose (Redis with AOF persistence via named volume)
 * ✅ Structured logging + CORS + input validation
 
 ## 🧩 TODO (Roadmap)
 * [ ] Handling tokenization differences, latency variations & fallback mechanisms
-* [ ] Hybrid Search (semantic + keyword (BM25)), MMR — Diversity Ranking, Query Rewriting Node and Token optimization / Cost Tracking
-* [ ] Document Incremental changes ingestion fix
-* [ ] Evaluation
+* [ ] Hybrid Search (semantic + keyword BM25) + Query Rewriting Node + Token optimization / Cost Tracking
+* ✅ DELETE /api/ingest/{doc_id} — clean removal from ChromaDB + Redis
+* [ ] Evaluation (RAGAS)
 
 ## ⚡ Tech Stack
 
