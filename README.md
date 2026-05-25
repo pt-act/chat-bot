@@ -226,43 +226,96 @@ Redis stores:
 
 ### 🔹 RAG System — Incremental Ingestion + MMR Retrieval
 
-**Retrieval — MMR (Maximal Marginal Relevance):**
-
-Instead of returning the top-3 most similar chunks (which can be near-identical and repetitive), MMR fetches the top-10 candidates and then selects 3 that are both relevant AND diverse from each other. This means the LLM sees a broader slice of the document rather than three nearly-identical paragraphs.
+#### Ingestion Flow
 
 ```
-ChromaDB.max_marginal_relevance_search(question, k=3, fetch_k=10)
-```
-
-**Ingestion — Incremental Chunk-Level Diffing:**
-
-When a document is re-uploaded, the pipeline does not delete and re-embed everything. Instead, it diffs at the chunk level using Redis:
-
-```
-1. Download PDF → compute SHA-256 file hash
-2. Compare with stored hash in Redis:
-   - Same hash → skip entirely ("file unchanged")
-   - Different hash → proceed
-3. Split into chunks → compute MD5 hash per chunk
-4. Redis set subtraction:
-     stale = old_chunk_hashes − new_chunk_hashes  → delete from ChromaDB
-     fresh = new_chunk_hashes − old_chunk_hashes  → embed and add to ChromaDB
-     unchanged chunks are skipped (no re-embedding cost)
-5. Update Redis registry with new chunk hashes
+POST /api/ingest  { file_name, s3_url }
+         │
+         ▼
+┌─────────────────────────────────────────────────┐
+│  STEP 1 — Download                              │
+│  requests.get(s3_url, stream=True)              │
+│  • Enforce MAX_FILE_SIZE_MB limit               │
+│  • Write to temp .pdf file on disk              │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  STEP 2 — File-level dedup check                │
+│  SHA-256(file) → new_file_hash                  │
+│                                                 │
+│  Redis: GET ingest_status:{doc_id}.file_hash    │
+│  ┌─ same hash? ──────────────────────────────┐  │
+│  │  return { status: "skipped",              │  │
+│  │           reason: "file unchanged" }      │  │
+│  └───────────────────────────────────────────┘  │
+│                                                 │
+│  Redis: HGET ingest:content_hashes new_hash     │
+│  ┌─ hash owned by different doc? ────────────┐  │
+│  │  return { status: "skipped",              │  │
+│  │           reason: "duplicate content      │  │
+│  │           already ingested as '{doc}'" }  │  │
+│  └───────────────────────────────────────────┘  │
+└────────────────────┬────────────────────────────┘
+                     │  (file is new or changed)
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  STEP 3 — Parse & chunk                         │
+│  PyPDFLoader  →  raw pages                      │
+│  RecursiveCharacterTextSplitter                 │
+│    chunk_size=800, overlap=100                  │
+│    separators: [\n\n, \n, ., " ", ""]           │
+│  _clean_text() — collapse extra whitespace      │
+│  MD5(chunk_text) → chunk_hash per chunk         │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  STEP 4 — Chunk-level diff                      │
+│                                                 │
+│  old_hashes = Redis SMEMBERS doc_chunks:{id}    │
+│  new_hashes = set of MD5s from step 3           │
+│                                                 │
+│  stale = old_hashes − new_hashes                │
+│    └─► delete those chunk IDs from ChromaDB     │
+│                                                 │
+│  fresh = new_hashes − old_hashes                │
+│    └─► embed + add only these to ChromaDB       │
+│                                                 │
+│  unchanged = intersection → skip (no API call)  │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  STEP 5 — Update Redis registry                 │
+│  DEL  doc_chunks:{doc_id}                       │
+│  SADD doc_chunks:{doc_id}  ← new_hashes         │
+│  SADD ingest:doc_ids       ← doc_id             │
+│  HDEL ingest:content_hashes old_file_hash       │
+│  HSET ingest:content_hashes new_hash → doc_id   │
+│  HSET ingest_status:{doc_id} status/hash/counts │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+         { status: "done", added, removed, total }
 ```
 
 **Redis keys used by the ingest pipeline:**
 
 | Key | Type | Purpose |
 |-----|------|---------|
-| `ingest_status:{doc_id}` | Hash | Stores status, file hash, version, chunk count per document |
-| `doc_chunks:{doc_id}` | Set | Stores all chunk MD5 hashes for the current version |
+| `ingest_status:{doc_id}` | Hash | Status, file hash, version, chunk counts per document |
+| `doc_chunks:{doc_id}` | Set | MD5 hash of every chunk in the current version |
 | `ingest:doc_ids` | Set | Global list of all ingested doc IDs |
-| `ingest:content_hashes` | Hash | Maps `file_hash → doc_id` for cross-document duplicate detection |
+| `ingest:content_hashes` | Hash | Maps `file_hash → doc_id` — catches same PDF under a different filename |
 
-**Global duplicate detection:**
+#### Retrieval — MMR (Maximal Marginal Relevance)
 
-If the same PDF is uploaded under a different file name, the `ingest:content_hashes` registry catches it and returns `status: skipped` with the name of the document that already holds that content — no re-embedding, no duplicated vectors.
+Instead of returning the top-3 most similar chunks (which can be near-identical), MMR fetches the top-10 candidates then selects 3 that are both **relevant AND diverse** from each other — so the LLM sees a broader slice of the document.
+
+```
+ChromaDB.max_marginal_relevance_search(question, k=3, fetch_k=10)
+```
 
 ### 🔹 LLM Layer
 Configurable via environment variables:
