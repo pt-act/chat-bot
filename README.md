@@ -287,9 +287,8 @@ Configurable via environment variables:
 * ✅ Structured logging + CORS + input validation
 
 ## 🧩 TODO (Roadmap)
-* [ ] Handling tokenization differences, latency variations & fallback mechanisms
-* [ ] Hybrid Search (semantic + keyword BM25) + Query Rewriting Node + Token optimization / Cost Tracking
-* ✅ DELETE /api/ingest/{doc_id} — clean removal from ChromaDB + Redis
+* [ ] LLM: Handling tokenization differences, latency variations & fallback mechanisms
+* [ ] Embeddings/Search: Hybrid Search (semantic + keyword BM25) + Query Rewriting Node + Token optimization / Cost Tracking
 * [ ] Evaluation (RAGAS)
 
 ## ⚡ Tech Stack
