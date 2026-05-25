@@ -1,6 +1,8 @@
 poetry.lock
 chroma_db
 .env
+logs/*.log
+logs/*.log.*
 
 # macOS system files
 .DS_Store

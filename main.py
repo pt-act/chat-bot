@@ -9,18 +9,13 @@ from fastapi.responses import JSONResponse
 from config import get_settings
 from controllers.chat_controller import router as chat_router
 from controllers.ingest_controller import router as ingest_router
+from middlewares.logging_setup import setup_logging
 from middlewares.rate_limiter import RateLimitMiddleware
 from db.redis_client import get_redis
 from db.vector import get_vectorstore
 
 settings = get_settings()
-
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
-# here _name__ is your file name called main.py, so the logger will be named main, and you can use it to log messages in this file.
+setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 # this defines a special function that FastAPI runs around the app lifecycle:
