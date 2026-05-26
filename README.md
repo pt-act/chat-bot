@@ -373,7 +373,6 @@ Configurable via environment variables:
 * ✅ Hallucination prevention — off-topic questions blocked before LLM is called
 * ✅ Citations — every answer includes which source documents were used
 * ✅ Conversational follow-ups — context-aware replies when no document match exists
-* ✅ Async ingest — returns 202 immediately, processes in background, poll status endpoint
 * ✅ Incremental ingestion — only re-embeds changed chunks, not the whole document
 * ✅ Ingestion safeguards — duplicate submission protection, file size limits, failed status saved to Redis, status polling endpoint
 * ✅ Global duplicate detection — same PDF under different names caught via content hash
