@@ -386,6 +386,7 @@ Configurable via environment variables:
 ## 🧩 TODO (Roadmap)
 * [ ] Guardrails
 * [ ] Evaluation (RAGAS)
+* [ ] Celery For ingestion
 
 ## ⚡ Tech Stack
 
