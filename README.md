@@ -7,6 +7,24 @@
 ![ChromaDB](https://img.shields.io/badge/VectorDB-Chroma-purple)
 ![LLM](https://img.shields.io/badge/LLM-OpenAI%20%7C%20Anthropic%20%7C%20Groq-black)
 
+## 📋 Table of Contents
+
+- [Project Overview](#-project-overview)
+- [Why This Project](#-why-this-project)
+- [Architecture](#-architecture)
+- [How It Works](#-how-it-works)
+- [Project Structure](#️-project-structure)
+- [Setup Instructions](#️-setup-instructions)
+- [Document Ingestion](#-6-document-ingestion-s3--chromadb)
+- [Chat API](#-7-chat-api)
+- [Health Check](#️-8-health-check)
+- [Core System Design](#-core-system-design)
+- [Key Features](#-key-features)
+- [TODO](#-todo-roadmap)
+- [Tech Stack](#-tech-stack)
+
+---
+
 ## 📌 Project Overview
 
 This project is a **production-style AI chatbot backend** built using:
