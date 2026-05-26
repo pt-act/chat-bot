@@ -369,11 +369,14 @@ Configurable via environment variables:
 ## 🧠 Key Features
 
 * ✅ Conversational memory (short + long-term via Redis)
-* ✅ RAG retrieval with score gate (cosine threshold 0.3) + MMR diversity ranking
+* ✅ RAG retrieval with cosine score gate (threshold 0.3) + MMR diversity ranking
 * ✅ Hallucination prevention — off-topic questions blocked before LLM is called
+* ✅ Citations — every answer includes which source documents were used
 * ✅ Conversational follow-ups — context-aware replies when no document match exists
+* ✅ Async ingest — returns 202 immediately, processes in background, poll status endpoint
 * ✅ Incremental ingestion — only re-embeds changed chunks, not the whole document
-* ✅ Global duplicate detection — same PDF under different names is caught via content hash
+* ✅ Ingestion safeguards — duplicate submission protection, file size limits, failed status saved to Redis, status polling endpoint
+* ✅ Global duplicate detection — same PDF under different names caught via content hash
 * ✅ Rate limiting — 60 requests/minute per IP (Redis-backed, returns 429 on breach)
 * ✅ Multi-LLM provider support (OpenAI, Anthropic, Groq)
 * ✅ Multilingual responses (Arabic / English auto-detected)
