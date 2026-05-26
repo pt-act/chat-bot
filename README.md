@@ -309,13 +309,37 @@ POST /api/ingest  { file_name, s3_url }
 | `ingest:doc_ids` | Set | Global list of all ingested doc IDs |
 | `ingest:content_hashes` | Hash | Maps `file_hash → doc_id` — catches same PDF under a different filename |
 
-#### Retrieval — MMR (Maximal Marginal Relevance)
+#### Retrieval — Score Gate + MMR (Hallucination Prevention)
 
-Instead of returning the top-3 most similar chunks (which can be near-identical), MMR fetches the top-10 candidates then selects 3 that are both **relevant AND diverse** from each other — so the LLM sees a broader slice of the document.
+Retrieval runs in two steps to prevent the LLM from hallucinating against weak or unrelated matches:
 
 ```
-ChromaDB.max_marginal_relevance_search(question, k=3, fetch_k=10)
+User question
+      │
+      ▼
+Step 1 — Relevance gate
+similarity_search k=1  →  score < 0.3 ?
+      │                         │
+      │                         └──► docs = ""  →  "I don't have information
+      │                                             about that in our knowledge
+      │                                             base. Please contact support."
+      │ score ≥ 0.3
+      │ (question is on-topic)
+      ▼
+Step 2 — MMR retrieval
+max_marginal_relevance_search k=3, fetch_k=10
+      │
+      ▼
+3 diverse, relevant chunks → LLM → grounded answer
 ```
+
+**Step 1 — Score gate:** fetches the single closest chunk and checks its cosine similarity score. If even the best match is below `0.3` the question is off-topic and the LLM is never called with guesswork context.
+
+**Step 2 — MMR:** only runs when step 1 passes. Fetches 10 candidates and picks the 3 that are both relevant AND diverse — avoiding 3 near-identical paragraphs being sent to the LLM.
+
+**ChromaDB is configured with cosine distance** (`hnsw:space: cosine`) — the correct metric for text embeddings. Without this, scores are L2-based and can go negative, making the threshold meaningless.
+
+> Threshold is configurable via `RETRIEVAL_SCORE_THRESHOLD` in `.env` (default `0.3`). Raise to `0.7` for stricter grounding, lower to `0.2` if too many valid questions are being rejected.
 
 ### 🔹 LLM Layer
 Configurable via environment variables:
@@ -327,7 +351,9 @@ Configurable via environment variables:
 ## 🧠 Key Features
 
 * ✅ Conversational memory (short + long-term via Redis)
-* ✅ RAG retrieval with MMR diversity ranking (fetch 10, return 3 diverse chunks)
+* ✅ RAG retrieval with score gate (cosine threshold 0.3) + MMR diversity ranking
+* ✅ Hallucination prevention — off-topic questions blocked before LLM is called
+* ✅ Conversational follow-ups — context-aware replies when no document match exists
 * ✅ Incremental ingestion — only re-embeds changed chunks, not the whole document
 * ✅ Global duplicate detection — same PDF under different names is caught via content hash
 * ✅ Rate limiting — 60 requests/minute per IP (Redis-backed, returns 429 on breach)
@@ -337,7 +363,7 @@ Configurable via environment variables:
 * ✅ Strict knowledge-base-only responses — refuses to answer outside ingested documents
 * ✅ FastAPI production API layer
 * ✅ Dockerized with Docker Compose (Redis with AOF persistence via named volume)
-* ✅ Structured logging + CORS + input validation
+* ✅ Structured logging to console + rotating file (logs/app.log, 10 MB cap)
 
 ## 🧩 TODO (Roadmap)
 * [ ] Guardrails

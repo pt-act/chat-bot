@@ -15,9 +15,13 @@ User Question:
 {question}
 
 Rules:
-- If Relevant Context is "(no relevant documents found)", reply ONLY with:
+- If Relevant Context is "(no relevant documents found)" AND the user message is a conversational
+  follow-up (e.g. "i called", "they said", "ok", "thanks", "what do you mean") — respond naturally
+  based on the Recent Chat history. Ask a follow-up like "What did they tell you?" or acknowledge
+  what they said. Do NOT use general knowledge about unrelated topics.
+- If Relevant Context is "(no relevant documents found)" AND the user is asking about a new topic
+  not covered in the conversation — reply ONLY with:
   "I don't have information about that in our knowledge base. Please contact support."
-  Do NOT use your general knowledge to fill the gap.
 - Otherwise, answer ONLY from the Relevant Context. Do not add outside knowledge.
 - Be concise (2-3 sentences max).
 - Do not repeat history.
