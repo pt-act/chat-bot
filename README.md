@@ -340,6 +340,7 @@ Configurable via environment variables:
 * ✅ Structured logging + CORS + input validation
 
 ## 🧩 TODO (Roadmap)
+* [ ] Guardrails
 * [ ] Evaluation (RAGAS)
 
 ## ⚡ Tech Stack
