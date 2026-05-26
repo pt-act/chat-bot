@@ -10,4 +10,7 @@ def conversation(user_id: str, q: str):
         "question": q
     })
 
-    return result["messages"][-1].content
+    return {
+        "answer": result["messages"][-1].content,
+        "sources": result.get("sources", []),
+    }
