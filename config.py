@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./chroma_db"
     chroma_collection: str = "policies"
 
+    # Retrieval
+    # Minimum similarity score (0.0–1.0) a chunk must reach to be passed to the LLM.
+    # Chunks below this score are discarded — if none pass, the bot replies with
+    # "I don't have information about that" instead of hallucinating from weak matches.
+    retrieval_score_threshold: float = 0.3
+
     # Ingest
     max_file_size_mb: int = 50
     download_timeout_seconds: int = 30
