@@ -1,5 +1,8 @@
+<div align="center">
 
-# 🤖 AI Chatbot Backend Service (LangChain + LangGraph + RAG + FastAPI)
+# 🤖 AI Chatbot Backend Service
+
+### LangChain + LangGraph + RAG + FastAPI
 
 ![Python](https://img.shields.io/badge/Python-3.10-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-Backend-green)
@@ -7,21 +10,27 @@
 ![ChromaDB](https://img.shields.io/badge/VectorDB-Chroma-purple)
 ![LLM](https://img.shields.io/badge/LLM-OpenAI%20%7C%20Anthropic%20%7C%20Groq-black)
 
+</div>
+
+---
+
 ## 📋 Table of Contents
 
 - [Project Overview](#-project-overview)
 - [Why This Project](#-why-this-project)
 - [Architecture](#-architecture)
 - [How It Works](#-how-it-works)
-- [Project Structure](#️-project-structure)
-- [Setup Instructions](#️-setup-instructions)
+- [Project Structure](#-project-structure)
+- [Setup Instructions](#-setup-instructions)
 - [Document Ingestion](#-6-document-ingestion-s3--chromadb)
 - [Chat API](#-7-chat-api)
-- [Health Check](#️-8-health-check)
+- [Health Check](#-8-health-check)
 - [Core System Design](#-core-system-design)
 - [Key Features](#-key-features)
 - [TODO](#-todo-roadmap)
 - [Tech Stack](#-tech-stack)
+- [Contributing](#-contributing)
+- [Summary](#-summary)
 
 ---
 
@@ -57,20 +66,32 @@ Making it suitable for real-world SaaS integrations.
 
 ## 🧠 Architecture
 
+<div align="center">
+
 ```
-User Query
-   ↓
-FastAPI (/api/chat)
-   ↓
-LangGraph Orchestrator
-   ├── Load Memory (Redis)
-   ├── Retrieve Context (ChromaDB)
-   ├── Generate Answer (LLM)
-   ├── Summarize Conversation
-   └── Store Memory (Redis)
-   ↓
-Response to User
+┌─────────────────────────────────────────────────────┐
+│                   User Query                        │
+└────────────────────────┬────────────────────────────┘
+                         │
+                         ▼
+              FastAPI  POST /api/chat
+                         │
+                         ▼
+          ┌──────────────────────────────┐
+          │     LangGraph Orchestrator   │
+          │                              │
+          │  1. load_memory   (Redis)    │
+          │  2. retrieve_context (Chroma)│
+          │  3. generate_answer  (LLM)   │
+          │  4. summarize                │
+          │  5. store_memory  (Redis)    │
+          └──────────────────────────────┘
+                         │
+                         ▼
+                  Response to User
 ```
+
+</div>
 
 ## 🧠 How It Works
 
@@ -110,22 +131,23 @@ chat-bot/
 
 ## ⚙️ Setup Instructions
 
-## 🧩 1. Install Miniconda
+### 🧩 1. Install Miniconda
 
 ```bash
-Visit:- https://www.anaconda.com/docs/getting-started/miniconda/install/mac-cli-install
 bash ~/Downloads/Miniconda3-*.sh
 source ~/miniconda3/bin/activate
 ```
 
-## 🐍 2. Create Environment
+> Full guide: https://www.anaconda.com/docs/getting-started/miniconda/install/mac-cli-install
+
+### 🐍 2. Create Environment
 
 ```bash
 conda create -n chat-bot python=3.10
 conda activate chat-bot
 ```
 
-## 📦 3. Clone and Install Dependencies
+### 📦 3. Clone and Install Dependencies
 
 ```bash
 git clone https://github.com/hasandeveloper/chat-bot.git
@@ -133,7 +155,7 @@ cd chat-bot
 pip install -r requirements.txt
 ```
 
-## ⚠️ 4. Configure Environment Variables
+### ⚠️ 4. Configure Environment Variables
 
 Copy the example file and fill in your values:
 
@@ -144,31 +166,28 @@ cp .env.example .env
 Key variables:
 
 ```env
-👉 Get your key from: https://platform.openai.com/account/api-keys
-OPENAI_API_KEY=your_openai_key_here
+OPENAI_API_KEY=your_openai_key_here     # https://platform.openai.com/account/api-keys
 
-LLM_PROVIDER=openai          # openai | anthropic | groq
+LLM_PROVIDER=openai                     # openai | anthropic | groq
 LLM_MODEL=gpt-4o-mini
 
 REDIS_HOST=localhost
 REDIS_PORT=6379
+
+RETRIEVAL_SCORE_THRESHOLD=0.3           # raise to 0.7 for stricter grounding
 ```
 
 See [.env.example](.env.example) for the full list of options.
 
 > **LangSmith (optional):** Tracing is disabled by default (`LANGSMITH_TRACING=false`). To enable it, set `LANGSMITH_TRACING=true` and provide a valid `LANGSMITH_API_KEY` from [smith.langchain.com](https://smith.langchain.com).
 
-## 🚀 5. Run Server
+### 🚀 5. Run Server
 
 ```bash
 uvicorn main:app --reload
 ```
 
-📍 Server:
-
-```
-http://127.0.0.1:8000
-```
+Server runs at `http://127.0.0.1:8000`
 
 Or run with Docker (includes Redis):
 
@@ -199,6 +218,12 @@ curl http://127.0.0.1:8000/api/ingest/status/terms_conditions
 
 ```bash
 curl http://127.0.0.1:8000/api/ingest/docs
+```
+
+### Delete a document
+
+```bash
+curl -X DELETE http://127.0.0.1:8000/api/ingest/terms_conditions
 ```
 
 ## 💬 7. Chat API
@@ -237,6 +262,7 @@ curl http://127.0.0.1:8000/health
 ## 🧠 Core System Design
 
 ### 🔹 Memory System
+
 Redis stores:
 - Full conversation history
 - Running conversation summary (for long-term context)
@@ -245,6 +271,8 @@ Redis stores:
 ### 🔹 RAG System — Incremental Ingestion + MMR Retrieval
 
 #### Ingestion Flow
+
+<div align="center">
 
 ```
 POST /api/ingest  { file_name, s3_url }
@@ -318,6 +346,8 @@ POST /api/ingest  { file_name, s3_url }
          { status: "done", added, removed, total }
 ```
 
+</div>
+
 **Redis keys used by the ingest pipeline:**
 
 | Key | Type | Purpose |
@@ -330,6 +360,8 @@ POST /api/ingest  { file_name, s3_url }
 #### Retrieval — Score Gate + MMR (Hallucination Prevention)
 
 Retrieval runs in two steps to prevent the LLM from hallucinating against weak or unrelated matches:
+
+<div align="center">
 
 ```
 User question
@@ -351,6 +383,8 @@ max_marginal_relevance_search k=3, fetch_k=10
 3 diverse, relevant chunks → LLM → grounded answer
 ```
 
+</div>
+
 **Step 1 — Score gate:** fetches the single closest chunk and checks its cosine similarity score. If even the best match is below `0.3` the question is off-topic and the LLM is never called with guesswork context.
 
 **Step 2 — MMR:** only runs when step 1 passes. Fetches 10 candidates and picks the 3 that are both relevant AND diverse — avoiding 3 near-identical paragraphs being sent to the LLM.
@@ -360,6 +394,7 @@ max_marginal_relevance_search k=3, fetch_k=10
 > Threshold is configurable via `RETRIEVAL_SCORE_THRESHOLD` in `.env` (default `0.3`). Raise to `0.7` for stricter grounding, lower to `0.2` if too many valid questions are being rejected.
 
 ### 🔹 LLM Layer
+
 Configurable via environment variables:
 - Uses conversation summary (long-term memory)
 - Uses recent messages (short-term memory)
@@ -386,9 +421,9 @@ Configurable via environment variables:
 * ✅ Structured logging to console + rotating file (logs/app.log, 10 MB cap)
 
 ## 🧩 TODO (Roadmap)
+
 * [ ] Guardrails
 * [ ] Evaluation (RAGAS)
-* [ ] Celery For ingestion
 
 ## ⚡ Tech Stack
 
@@ -400,6 +435,59 @@ Configurable via environment variables:
 * **Cache / Memory:** Redis
 * **Runtime:** Python 3.10
 * **Container:** Docker + Docker Compose
+
+## 🤝 Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. **Fork** the repository and clone your fork
+2. **Create a branch** for your feature or fix:
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+3. **Set up the dev environment** — pick one:
+
+   **Option A — Local (Conda)**
+   ```bash
+   conda create -n chat-bot python=3.10
+   conda activate chat-bot
+   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
+   ```
+
+   **Option B — Docker**
+   ```bash
+   docker-compose up --build
+   ```
+   The API will be available at `http://127.0.0.1:8000` and Redis starts automatically.
+   To run tests inside the container:
+   ```bash
+   docker-compose exec api pytest
+   ```
+
+4. **Run the tests** before making changes:
+   ```bash
+   pytest                     # local
+   docker-compose exec api pytest   # Docker
+   ```
+5. **Make your changes**, then run tests again to confirm nothing broke
+6. **Open a Pull Request** with a clear description of what you changed and why
+
+**Good first contributions:**
+- Add support for a new LLM provider in `utils/llm_adapter.py`
+- Add a new document loader (e.g. DOCX, TXT) in `ingest/`
+- Improve test coverage in `tests/`
+- Add Guardrails or RAGAS evaluation (see TODO)
+
+**Project layout to get oriented:**
+- `graph/nodes/` — each file is one step in the LangGraph pipeline
+- `ingest/policies.py` — full ingestion pipeline (download → chunk → diff → embed)
+- `graph/nodes/retrieve_context.py` — score gate + MMR retrieval logic
+- `prompts/answer.py` — the LLM prompt (easiest place to start experimenting)
+
+> Please open an issue before starting large changes so we can discuss approach first.
+
+---
 
 ## 📌 Summary
 
