@@ -11,3 +11,8 @@ audit_artifacts/
 
 **/__pycache__/
 .personal/
+
+# Virtual environments
+.venv/
+venv/
+env/
