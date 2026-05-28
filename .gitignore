@@ -10,3 +10,4 @@ __pycache__
 audit_artifacts/
 
 **/__pycache__/
+.personal/
