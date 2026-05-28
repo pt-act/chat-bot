@@ -15,7 +15,3 @@ def get_redis() -> _redis.Redis:
         socket_connect_timeout=5,
         socket_timeout=5,
     )
-
-
-# backward-compatible alias used by graph nodes
-redis = get_redis()

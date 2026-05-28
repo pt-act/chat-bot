@@ -1,25 +1,9 @@
-"""
-conftest.py — shared fixtures for all tests.
-
-pytest automatically loads this file before running any test.
-Fixtures defined here are available to every test file without importing them.
-"""
-
 import pytest
 import fakeredis
 from fpdf import FPDF
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from langchain_chroma import Chroma
 
-
-# ── Test document content ─────────────────────────────────────────────────────
-# Two versions of the same policy.
-# V2 has two paragraphs changed (30→60 days return window, 5-7→3-5 day refund).
-# The other paragraphs are identical — so the diff should only touch the changed ones.
-
-# Policies are long enough to produce multiple chunks at chunk_size=800.
-# Sections marked CHANGED differ between v1 and v2.
-# Sections marked UNCHANGED are identical — those chunks must be skipped on re-ingest.
 
 POLICY_V1 = """\
 Return Policy
@@ -63,8 +47,6 @@ deletion of their data at any time by contacting privacy@company.com. We comply 
 all applicable data protection regulations including GDPR and local privacy laws.
 """
 
-# CHANGED: return window (30→60 days), refund timeline (5-7→3-5 days)
-# UNCHANGED: exchange policy, shipping policy, privacy policy
 POLICY_V2 = """\
 Return Policy
 
@@ -109,10 +91,6 @@ all applicable data protection regulations including GDPR and local privacy laws
 
 
 def _make_pdf_bytes(text: str) -> bytes:
-    """
-    Build a real PDF from plain text and return its bytes.
-    fpdf2 is a lightweight library — no external tools needed.
-    """
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", size=11)
@@ -122,49 +100,28 @@ def _make_pdf_bytes(text: str) -> bytes:
     return bytes(pdf.output())
 
 
-# ── PDF fixtures ──────────────────────────────────────────────────────────────
-# scope="session" means the PDF bytes are generated once and reused for all tests.
-# This is safe because these are read-only bytes.
-
 @pytest.fixture(scope="session")
 def pdf_v1_bytes():
-    """PDF bytes for the original policy."""
     return _make_pdf_bytes(POLICY_V1)
 
 
 @pytest.fixture(scope="session")
 def pdf_v2_bytes():
-    """PDF bytes for the updated policy (two paragraphs changed)."""
     return _make_pdf_bytes(POLICY_V2)
 
-
-# ── Fake Redis ────────────────────────────────────────────────────────────────
-# fakeredis behaves exactly like real Redis but lives in memory.
-# No Redis server needed. Each test gets a fresh empty instance.
 
 @pytest.fixture
 def fake_redis():
     return fakeredis.FakeRedis(decode_responses=True)
 
 
-# ── Fake embeddings ───────────────────────────────────────────────────────────
-# Real embeddings would hit the OpenAI API on every test — slow and costs money.
-# FakeEmbeddings returns small dummy vectors so ChromaDB works without any API call.
-
 class FakeEmbeddings:
-    """Returns 8-dimensional dummy vectors. Fast, free, no API key needed."""
-
     def embed_documents(self, texts):
-        # return a slightly different vector per text so ChromaDB doesn't deduplicate
         return [[float((i + 1) % 9) / 9] * 8 for i, _ in enumerate(texts)]
 
     def embed_query(self, text):
         return [0.5] * 8
 
-
-# ── Temp ChromaDB ─────────────────────────────────────────────────────────────
-# Each test gets its own empty ChromaDB in a temporary directory.
-# tmp_path is a built-in pytest fixture that creates a unique temp folder per test.
 
 @pytest.fixture
 def vectorstore(tmp_path):
@@ -175,24 +132,8 @@ def vectorstore(tmp_path):
     )
 
 
-# ── Combined env fixture ──────────────────────────────────────────────────────
-# This patches Redis and ChromaDB in the ingest module.
-# Every test that requests `ingest_env` gets:
-#   - A fresh fake Redis
-#   - A fresh temp ChromaDB
-#   - Both injected into ingest/policies.py so it uses them instead of the real ones
-
 @pytest.fixture
 def ingest_env(fake_redis, vectorstore):
-    """
-    Patch the two external dependencies used by ingest/policies.py.
-
-    `patch("ingest.policies.redis", fake_redis)` replaces the `redis` variable
-    inside the policies module with our fake instance for the duration of the test.
-
-    `patch("ingest.policies.get_vectorstore", return_value=vectorstore)` makes
-    every call to get_vectorstore() return our temp ChromaDB instead of the real one.
-    """
-    with patch("ingest.policies.redis", fake_redis), \
+    with patch("ingest.policies.get_redis", return_value=fake_redis), \
          patch("ingest.policies.get_vectorstore", return_value=vectorstore):
         yield fake_redis, vectorstore

@@ -8,7 +8,7 @@ from services.chat_service import conversation
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# This reads the `x-user-id` HTTP header and assigns its value to `x_user_id`, or uses `"anonymous"` as the default if the header is missing.
+
 @router.post("/chat")
 def chat_controller(
     request: ChatRequest,

@@ -1,13 +1,15 @@
-from graph.builder import build_graph
 from langchain_core.messages import HumanMessage
+from functools import lru_cache
 
-graph = build_graph()
+from graph.builder import build_graph
+
+_graph = lru_cache(maxsize=1)(build_graph)
+
 
 def conversation(user_id: str, q: str):
-
-    result = graph.invoke({
+    result = _graph().invoke({
         "user_id": user_id,
-        "question": q
+        "question": q,
     })
 
     return {

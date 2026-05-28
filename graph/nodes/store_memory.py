@@ -4,12 +4,13 @@ import logging
 from langchain_core.messages import AIMessage, HumanMessage
 
 from config import get_settings
-from db.redis_client import redis
+from db.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
 
 def store_memory(state):
+    redis = get_redis()
     messages = state.get("messages") or []
     serialized = []
 
