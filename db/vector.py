@@ -19,7 +19,17 @@ def chroma() -> Chroma:
 
 
 class VectorStoreRepository:
-    """Thin adapter around ChromaDB to avoid touching private _collection API outside this module."""
+    """
+    Thin adapter around ChromaDB to isolate private _collection API usage.
+
+    ⚠️ RISK: `langchain_chroma.Chroma._collection` is a private attribute.
+    Upgrading `langchain-chroma` beyond the tested minor version may break
+    these methods if the internal `Collection` API changes.
+
+    Mitigation:
+      - Pin `langchain-chroma` to the tested minor range in requirements.txt
+      - All _collection access is confined to this class; never access directly
+    """
 
     def __init__(self, vs: Chroma) -> None:
         self._vs = vs

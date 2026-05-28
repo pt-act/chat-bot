@@ -68,6 +68,12 @@ class TestRateLimitMiddleware:
 
     def test_request_within_limit_succeeds(self):
         client = self._make_app(max_requests=5)
+        # Clear any residual rate limit keys from other tests
+        from db.redis_client import get_redis
+
+        redis = get_redis()
+        for key in redis.scan_iter(match="rate_limit:*"):
+            redis.delete(key)
         resp = client.get("/test")
         assert resp.status_code == 200
 

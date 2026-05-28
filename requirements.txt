@@ -19,12 +19,10 @@ langchain-anthropic
 langchain-groq
 langchain-community==0.4.1
 langchain-chroma==1.1.0
-langchain-huggingface
-
-numpy<2
-sentence-transformers<3.0
-transformers<4.50
 
 tiktoken==0.12.0
+python-json-logger==2.0.7
+fastembed==0.8.0
+pillow>=12.2.0  # fastembed dependency — pinned to avoid CVEs in <12.2.0
 
 pypdf==6.11.0

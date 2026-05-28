@@ -168,8 +168,11 @@ Key variables:
 ```env
 OPENAI_API_KEY=your_openai_key_here     # https://platform.openai.com/account/api-keys
 
-LLM_PROVIDER=openai                     # openai | anthropic | groq
+LLM_PROVIDER=openai                     # openai | anthropic | google | groq | ollama | openrouter | together | deepseek | mistral
 LLM_MODEL=gpt-4o-mini
+# Override base URL for any OpenAI-compatible endpoint:
+# LLM_BASE_URL=http://localhost:11434/v1  # Ollama
+# LLM_BASE_URL=https://openrouter.ai/api/v1  # OpenRouter
 
 REDIS_HOST=localhost
 REDIS_PORT=6379
@@ -178,6 +181,78 @@ RETRIEVAL_SCORE_THRESHOLD=0.3           # raise to 0.7 for stricter grounding
 ```
 
 See [.env.example](.env.example) for the full list of options.
+
+#### 🧠 LLM Provider Support
+
+The system uses a **universal OpenAI-compatible adapter** — most modern providers expose an OpenAI-compatible API, so we support them with a single code path.
+
+**Native providers:**
+- `openai` — GPT-4o, GPT-4o-mini, etc.
+- `anthropic` — Claude 3.5 Sonnet, Haiku, etc.
+- `google` — Gemini models (requires `GOOGLE_API_KEY`)
+
+**OpenAI-compatible (use `LLM_BASE_URL` override):**
+- `ollama` — Local models (Llama, Mistral, etc.)
+- `openrouter` — Route to 100+ models
+- `together` — Together AI
+- `groq` — Groq (also works natively)
+- `deepseek` — DeepSeek models
+- `fireworks` — Fireworks AI
+- `mistral` — Mistral AI
+- `vllm` — vLLM self-hosted
+- `lmstudio` — LM Studio local
+- `llamacpp` — llama.cpp local
+
+All OpenAI-compatible providers use the same `langchain_openai.ChatOpenAI` client. Just set `LLM_BASE_URL` to point to your endpoint. Local providers (Ollama, LM Studio, vLLM) don't need an API key.
+
+#### 📦 Embedding Providers
+
+The default embedding provider is OpenAI (no extra dependencies).
+
+**Recommended for local embeddings — FastEmbed (ONNX):**
+
+```bash
+# Already included in requirements.txt
+# Set EMBEDDING_PROVIDER=fastembed
+# Set EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+```
+
+FastEmbed uses ONNX Runtime (no torch dependency):
+- ~50MB download vs ~2GB for torch-based alternatives
+- Zero CVEs — pure Python + ONNX
+- Supports popular models: `BAAI/bge-small-en-v1.5`, `sentence-transformers/all-MiniLM-L6-v2`, etc.
+
+**Alternative — HuggingFace (torch-based):**
+
+```bash
+pip install langchain-huggingface sentence-transformers transformers numpy
+```
+
+> ⚠️ `sentence-transformers` and `transformers` pull in `torch` which has known CVEs on older versions. Only install these if you explicitly need HuggingFace-specific models not available in FastEmbed.
+
+#### 🔒 Security Configuration
+
+Production deployments must configure these security settings in `.env`:
+
+```env
+# API Key Authentication (recommended for production)
+API_KEY=your-secret-api-key-here        # Set to enable auth on ingest endpoints
+REQUIRE_AUTH_FOR_INGEST=true           # Require API key for POST /api/ingest and GET /api/ingest/docs
+
+# CORS — production should never use "*"
+CORS_ORIGINS=["https://your-domain.com"]  # Empty list [] disables CORS entirely
+
+# Rate Limiting (behind reverse proxy)
+TRUSTED_PROXIES=["10.0.0.0/8", "172.16.0.0/12"]  # CIDR ranges of trusted load balancers
+ALLOWED_HOSTS=["*"]                    # SSRF protection: whitelist download hosts or ["*"] to allow all public hosts
+```
+
+**Authentication behavior:**
+- `DELETE /api/ingest/{doc_id}` **always** requires the `X-API-Key` header when `API_KEY` is set
+- Other ingest endpoints require it only when `REQUIRE_AUTH_FOR_INGEST=true`
+- When `API_KEY` is empty, auth is skipped (backward-compatible dev mode)
+
+**Rate limiting:** 60 requests/minute per IP. If running behind Cloudflare/nginx, configure `TRUSTED_PROXIES` so the real client IP is used instead of the proxy's IP.
 
 > **LangSmith (optional):** Tracing is disabled by default (`LANGSMITH_TRACING=false`). To enable it, set `LANGSMITH_TRACING=true` and provide a valid `LANGSMITH_API_KEY` from [smith.langchain.com](https://smith.langchain.com).
 
@@ -253,11 +328,23 @@ curl -X POST "http://127.0.0.1:8000/api/chat" \
 
 > `X-User-ID` identifies the user session — memory is stored and loaded per user. Defaults to `anonymous` if omitted.
 
-## 🏥 8. Health Check
+## 🏥 8. Health & Readiness
+
+### Startup health (cached flags)
 
 ```bash
 curl http://127.0.0.1:8000/health
 ```
+
+Returns `ok` or `degraded` based on Redis and ChromaDB connectivity at startup time.
+
+### Live readiness probe
+
+```bash
+curl http://127.0.0.1:8000/ready
+```
+
+Returns `200` with `{"status": "ready"}` only if both Redis and ChromaDB respond right now. Returns `503` with dependency-specific error details if either is down. Use this for Kubernetes readiness probes or load balancer health checks.
 
 ## 🧠 Core System Design
 
@@ -472,7 +559,18 @@ Contributions are welcome! Here's how to get started:
     docker-compose -f docker-compose.test.yml exec api pytest   # Docker
     ```
 5. **Make your changes**, then run tests again to confirm nothing broke
-6. **Open a Pull Request** with a clear description of what you changed and why
+6. **Install git-secrets** to prevent accidentally committing API keys:
+   ```bash
+   # macOS
+   brew install git-secrets
+   git secrets --install
+   git secrets --register-aws
+   git secrets --register-azure
+
+   # Scan before committing
+   git secrets --scan
+   ```
+7. **Open a Pull Request** with a clear description of what you changed and why
 
 **Good first contributions:**
 - Add support for a new LLM provider in `utils/llm_adapter.py`

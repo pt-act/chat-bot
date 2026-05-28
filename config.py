@@ -15,8 +15,10 @@ class Settings(BaseSettings):
     # LLM
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"
+    llm_base_url: str = ""  # Override for OpenAI-compatible endpoints (Ollama, OpenRouter, etc.)
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    google_api_key: str = ""  # New: for Google Gemini
     groq_api_key: str = ""
 
     # Embeddings
@@ -46,6 +48,7 @@ class Settings(BaseSettings):
     # App
     debug: bool = False
     log_level: str = "INFO"
+    log_format: str = "text"  # "text" | "json" — JSON for log aggregators (Datadog, CloudWatch)
     cors_origins: list[str] = []
 
     # Security
@@ -62,8 +65,20 @@ class Settings(BaseSettings):
             raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
         if provider == "anthropic" and not self.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic")
+        if provider == "google" and not self.google_api_key:
+            raise ValueError("GOOGLE_API_KEY is required when LLM_PROVIDER=google")
         if provider == "groq" and not self.groq_api_key:
             raise ValueError("GROQ_API_KEY is required when LLM_PROVIDER=groq")
+        # OpenAI-compatible providers with base_url don't need API key (local Ollama, etc.)
+        return self
+
+    @model_validator(mode="after")
+    def check_embedding_keys(self):
+        """Fail fast if embedding provider's API key is missing."""
+        provider = self.embedding_provider.lower()
+        if provider == "openai" and not self.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai")
+        # fastembed and huggingface don't need API keys — local inference only
         return self
 
     @model_validator(mode="after")

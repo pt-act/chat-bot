@@ -12,11 +12,19 @@ from controllers.ingest_controller import router as ingest_router
 from db.redis_client import get_redis
 from db.vector import get_vectorstore
 from middlewares.logging_setup import setup_logging
-from middlewares.observability import CorrelationIdMiddleware, RequestTimingMiddleware
+from middlewares.observability import (
+    CorrelationIdFilter,
+    CorrelationIdMiddleware,
+    RequestTimingMiddleware,
+)
 from middlewares.rate_limiter import RateLimitMiddleware
 
 settings = get_settings()
-setup_logging(settings.log_level)
+setup_logging(settings.log_level, settings.log_format)
+
+# Install correlation ID filter on root logger so every log line gets it
+logging.getLogger().addFilter(CorrelationIdFilter())
+
 logger = logging.getLogger(__name__)
 
 _redis_ok = False
