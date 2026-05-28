@@ -1,5 +1,6 @@
-import redis as _redis
 from functools import lru_cache
+
+import redis as _redis
 
 from config import get_settings
 

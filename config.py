@@ -1,4 +1,5 @@
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,7 +7,7 @@ class Settings(BaseSettings):
     # Pydantic automatically matches ex:- OPENAI_API_KEY become openai_api_key
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # take env value if defined or use the default value defined here, for example, if you have OPENAI_API_KEY in your .env file, it will override the default empty string value defined here.
+    # Env vars override defaults, e.g. OPENAI_API_KEY in .env overrides the empty string below.
     # LLM
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"

@@ -1,11 +1,12 @@
-from langgraph.graph import StateGraph, START, END
-from graph.state import State
+from langgraph.graph import END, START, StateGraph
 
+from graph.nodes.generate_answer import generate_answer
 from graph.nodes.load_memory import load_memory
 from graph.nodes.retrieve_context import retrieve_context
-from graph.nodes.generate_answer import generate_answer
 from graph.nodes.store_memory import store_memory
 from graph.nodes.summarize import summarize
+from graph.state import State
+
 
 def build_graph():
     graph = StateGraph(State)

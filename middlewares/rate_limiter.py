@@ -1,5 +1,5 @@
-import time
 import logging
+import time
 
 from fastapi import Request
 from fastapi.responses import JSONResponse

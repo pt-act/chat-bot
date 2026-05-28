@@ -1,5 +1,4 @@
 import logging
-import re
 
 from config import get_settings
 from db.vector import get_vectorstore

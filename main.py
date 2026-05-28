@@ -9,10 +9,10 @@ from fastapi.responses import JSONResponse
 from config import get_settings
 from controllers.chat_controller import router as chat_router
 from controllers.ingest_controller import router as ingest_router
-from middlewares.logging_setup import setup_logging
-from middlewares.rate_limiter import RateLimitMiddleware
 from db.redis_client import get_redis
 from db.vector import get_vectorstore
+from middlewares.logging_setup import setup_logging
+from middlewares.rate_limiter import RateLimitMiddleware
 
 settings = get_settings()
 setup_logging(settings.log_level)

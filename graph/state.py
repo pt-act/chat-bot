@@ -1,6 +1,6 @@
-from typing import List
-from typing_extensions import TypedDict
+
 from langchain_core.messages import BaseMessage
+from typing_extensions import TypedDict
 
 
 class State(TypedDict):
@@ -9,4 +9,4 @@ class State(TypedDict):
     messages: list[BaseMessage]
     docs: str
     summary: str
-    sources: List[str]
+    sources: list[str]

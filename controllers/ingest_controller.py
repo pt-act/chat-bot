@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from db.redis_client import get_redis
-from db.vector import get_vectorstore, get_chunks_by_doc_id, delete_chunks_by_ids
+from db.vector import delete_chunks_by_ids, get_chunks_by_doc_id, get_vectorstore
 from schemas.ingest import IngestRequest
 from services.ingest_service import ingest_file
 

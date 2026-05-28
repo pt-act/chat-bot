@@ -1,9 +1,9 @@
-import pytest
-import fakeredis
-from fpdf import FPDF
-from unittest.mock import patch, MagicMock
-from langchain_chroma import Chroma
+from unittest.mock import patch
 
+import fakeredis
+import pytest
+from fpdf import FPDF
+from langchain_chroma import Chroma
 
 POLICY_V1 = """\
 Return Policy

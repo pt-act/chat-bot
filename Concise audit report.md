@@ -1,81 +1,100 @@
-No files were modified.
+# Re-Audit: chat-bot — 2026-05-28
 
-Quick triage:
-- Detected stack: Python 3.10, FastAPI, LangChain/LangGraph, Redis, ChromaDB, Docker Compose.
-- I spot-checked tests with:
-  - `python3 --version`
-  - `/workspace/chat-bot/.venv/bin/pytest -q`
-- Result: `16 passed, 48 warnings in 1.13s`
-- I also used existing evidence in:
-  - `/workspace/chat-bot/audit_artifacts/coverage/coverage-summary.json`
-  - `/workspace/chat-bot/audit_artifacts/logs/lizard.log`
-  - `/workspace/chat-bot/audit_artifacts/logs/ruff-check.log`
+Re-evaluation of the 8 original findings against the current codebase. Changes since the original audit are noted.
 
-Relevant snippet showing current coupling pattern:
-```python
-# /workspace/chat-bot/services/chat_service.py
-graph = build_graph()
+---
 
-# /workspace/chat-bot/db/redis_client.py
-redis = get_redis()
-```
+## 1. ~~High~~ **Resolved — Graph node tests added**
 
-## Concise audit report (8 findings max)
+- **Location:** `tests/test_graph_nodes.py` (11 tests), `tests/test_api.py` (16 tests), `tests/test_ingest.py` (16 tests)
+- **Change since original:** **Fixed.** The original audit found only ingest tests. `test_api.py` now covers health, home, chat (success/failure/validation), ingest (success/failure/validation), and the custom validation error handler. `test_graph_nodes.py` now covers all 5 graph nodes in isolation with mocked Redis, LLM, and vectorstore. 43 tests total, all passing.
+- **Remaining gap:** `RateLimitMiddleware` is still tested only indirectly through integration.
+- **Remediation:** Add rate limiter test with a mock Redis counter.
 
-1. **High — Test coverage is narrow despite a “green” suite**
-   - **Location:** `/workspace/chat-bot/tests/test_ingest.py:1-336`, evidence in `/workspace/chat-bot/audit_artifacts/coverage/coverage-summary.json:12-92`
-   - **Issue:** The only real test module is for ingest flow. There are no tests for `/workspace/chat-bot/main.py`, `/workspace/chat-bot/controllers/chat_controller.py`, `/workspace/chat-bot/controllers/ingest_controller.py`, `/workspace/chat-bot/middlewares/rate_limiter.py`, or the chat graph nodes.
-   - **Why it matters:** The highest-risk production path is chat/request handling, but it is effectively untested.
-   - **Remediation:** Add API tests with FastAPI `TestClient` for `/api/chat`, `/api/ingest/*`, health/startup behavior, rate limiting, and graph-node unit tests with mocked LLM/vector/Redis dependencies.
+---
 
-2. **High — `process_policy` is a “god function” with too many responsibilities**
-   - **Location:** `/workspace/chat-bot/ingest/policies.py:91-245`
-   - **Evidence:** `/workspace/chat-bot/audit_artifacts/logs/lizard.log:108`
-   - **Issue:** One function handles download, hashing, dedupe, PDF parsing, chunking, vector writes, Redis writes, status persistence, and cleanup.
-   - **Why it matters:** Hard to reason about, hard to test in isolation, and likely to become the main maintenance bottleneck.
-   - **Remediation:** Split into smaller units such as `download_pdf`, `detect_duplicate`, `build_chunks`, `diff_chunks`, `sync_vectorstore`, and `persist_ingest_status`; then compose them in a thin orchestrator.
+## 2. High — `process_policy` is still a god function
 
-3. **Medium — Import-time singletons create tight coupling and make testing harder**
-   - **Location:** `/workspace/chat-bot/services/chat_service.py:4-6`, `/workspace/chat-bot/db/redis_client.py:7-21`, `/workspace/chat-bot/main.py:17-18`
-   - **Issue:** Graph/settings/Redis are initialized at import time and cached globally.
-   - **Why it matters:** This makes dependency overrides awkward, increases startup side effects, and encourages patching internals instead of injecting dependencies.
-   - **Remediation:** Move to dependency injection/factory functions and wire dependencies through FastAPI `Depends` or service constructors.
+- **Location:** `ingest/policies.py:164-218`
+- **Change since original:** **Partially improved.** The function was decomposed into helpers (`_download_file`, `_file_hash`, `_chunk_hash`, `_check_duplicate_content`, `_build_chunks`, `_sync_vectorstore`, `_persist_ingest_status`) and the main body is now a thin orchestrator. But it's still a single 55-line function that owns the full lifecycle including error handling and cleanup.
+- **Why it matters:** The function is easier to read now, but still hard to test individual steps in isolation (e.g., testing `_sync_vectorstore` without going through the full flow).
+- **Remediation:** Consider extracting the try/except/finally orchestration into a class or making each helper independently testable with explicit parameter passing (not relying on Redis state side effects).
 
-4. **Medium — Application code depends on private Chroma internals**
-   - **Location:** `/workspace/chat-bot/controllers/ingest_controller.py:54-57`, `/workspace/chat-bot/ingest/policies.py:181-189`
-   - **Issue:** Direct use of `vs._collection.get(...)` and `vs._collection.delete(...)`.
-   - **Why it matters:** `_collection` is an internal API; upgrades can break behavior without warning.
-   - **Remediation:** Wrap vector-store operations behind a local repository/adapter layer and use supported public APIs where possible.
+---
 
-5. **Medium — Startup and health checks can report “healthy” even when core dependencies fail**
-   - **Location:** `/workspace/chat-bot/main.py:26-37`, `/workspace/chat-bot/main.py:70-72`
-   - **Issue:** Redis/Chroma connection failures are logged but swallowed; `/health` still returns `{"status": "ok"}`.
-   - **Why it matters:** Misleading readiness signals complicate operations and hide broken deployments.
-   - **Remediation:** Fail startup for required dependencies, or make `/health` dependency-aware and return degraded/unhealthy status when Redis or Chroma is unavailable.
+## 3. Medium — Import-time singletons persist
 
-6. **Medium — CI/CD and quality automation are effectively absent**
-   - **Location:** repository root; no `.github/workflows` present
-   - **Issue:** No committed CI workflow for tests/lint/type checks; also no committed project-level lint config such as `pyproject.toml`, `ruff.toml`, or `.pre-commit-config.yaml`.
-   - **Why it matters:** Regressions, style drift, and missed dependency/runtime issues are more likely.
-   - **Remediation:** Add a minimal CI pipeline running pytest, lint, and security/dependency scans on every push/PR; commit tool configuration to the repo.
+- **Location:** `services/chat_service.py:6`, `db/redis_client.py:7`, `config.py:49`
+- **Change since original:** **Marginally improved.** The graph is now lazily initialized via `lru_cache(maxsize=1)` in `chat_service.py:6` instead of at import time. Redis and settings still use `@lru_cache` global singletons.
+- **Why it matters:** `@lru_cache` makes dependency override in tests require `lru_cache.cache_clear()` or `patch` on the factory function — awkward but workable. The real cost is that `main.py:17` calls `get_settings()` at module level, which means settings load on import.
+- **Remediation:** Move `settings = get_settings()` inside the `lifespan` function. Accept Redis/vectorstore as parameters to controllers via FastAPI `Depends`.
 
-7. **Medium — Docker/test instructions are inconsistent**
-   - **Location:** `/workspace/chat-bot/README.md:463-471`, `/workspace/chat-bot/Dockerfile:8-15`, `/workspace/chat-bot/requirements-dev.txt:1-4`
-   - **Issue:** README says to run `docker-compose exec api pytest`, but the image only installs `/workspace/chat-bot/requirements.txt`, not `/workspace/chat-bot/requirements-dev.txt`.
-   - **Why it matters:** New contributors following the docs will likely hit missing-tool errors in containerized test runs.
-   - **Remediation:** Either install dev dependencies in a dedicated test stage/profile or update the README to clearly separate runtime and test containers.
+---
 
-8. **Low — Minor code hygiene/style drift is visible**
-   - **Location:** `/workspace/chat-bot/services/chat_service.py:2`, `/workspace/chat-bot/ingest/policies.py:95`, `/workspace/chat-bot/ingest/policies.py:141-147`
-   - **Evidence:** `/workspace/chat-bot/audit_artifacts/logs/ruff-check.log:1-35`
-   - **Issue:** Unused import/variable plus tutorial-style comments like “explain me below code in detail” remain in production code.
-   - **Why it matters:** Small, but it adds noise and makes the codebase feel less maintained.
-   - **Remediation:** Clean unused symbols, trim explanatory comment blocks to intent-focused comments, and enforce linting in CI.
+## 4. ~~Medium~~ **Resolved — Private Chroma internals wrapped in adapter**
 
-## Bottom line
-The repo is small and understandable, and the ingest path has decent test depth, but maintainability is dragged down by one oversized ingest function, import-time/global coupling, lack of tests around the actual API/chat path, and missing automation. If I were prioritizing next steps, I’d do:
+- **Location:** `db/vector.py:21-57`, `ingest/policies.py:116-143`
+- **Change since original:** **Fixed.** `VectorStoreRepository` now encapsulates all `_collection` access. `get_by_doc_id(doc_id)`, `delete_by_ids(ids)`, and `add_documents(docs)` are exposed as public methods. `ingest/policies.py` creates a `VectorStoreRepository` instance and uses it for all vectorstore operations. `tests/test_ingest.py` assertions also use the public adapter instead of touching `_collection` directly.
+- **Why it matters:** `_collection` is an implementation detail of ChromaDB. A library upgrade could break these calls silently. The adapter localizes that risk to one module.
+- **Remediation:** — resolved.
 
-1. Add API/chat tests.
-2. Refactor `/workspace/chat-bot/ingest/policies.py`.
-3. Remove global singletons in service/db setup.
-4. Add CI and fix Docker/test documentation mismatch.
+---
+
+## 5. ~~Medium~~ **Resolved — Health checks now reflect dependency status**
+
+- **Location:** `main.py:26-45`, `main.py:77-81`
+- **Change since original:** **Fixed.** The lifespan handler tests Redis ping and Chroma similarity search, setting `_redis_ok`/`_chroma_ok` flags. The `/health` endpoint returns `"degraded"` when either dependency is down, with per-dependency status in the response. Tests in `test_api.py` verify all four states (all ok, redis down, chroma down, both down).
+
+---
+
+## 6. ~~Medium~~ **Partially resolved — CI exists, but lint is failing**
+
+- **Location:** `.github/workflows/ci.yml`
+- **Change since original:** **Fixed.** A GitHub Actions CI workflow now runs on push/PR to main: installs deps, runs `ruff check .`, runs `pytest -q`.
+- **New issue:** `ruff check .` currently reports **40 errors** (14 unsorted imports, 14 missing newlines, 5 line-too-long, 4 unused imports, 1 unused variable, 1 deprecated `typing.List`). CI would fail on the lint step today.
+- **Remediation:** Run `ruff check . --fix` (33 auto-fixable) and manually fix the remaining 7. Add a `ruff.toml` or `[tool.ruff]` config if stricter rules are desired.
+
+---
+
+## 7. ~~Medium~~ **Resolved — docker-compose.test.yml created, README updated**
+
+- **Location:** `Dockerfile:18-23`, `docker-compose.yml`, `docker-compose.test.yml`, `README.md:463-471`
+- **Change since original:** **Fixed.** A multi-stage build has a `test` target that installs `requirements-dev.txt`, `httpx`, and `ruff`. A new `docker-compose.test.yml` builds the `api` service with `target: test`, so pytest and all dev dependencies are available inside the container. The README now references `docker-compose -f docker-compose.test.yml exec api pytest`.
+- **Remaining issue:** None.
+- **Remediation:** — resolved.
+
+---
+
+## 8. Low — Code hygiene still needs cleanup
+
+- **Location:** Multiple files
+- **Change since original:** **Not addressed.** Ruff reports 40 lint violations:
+  - `F401` unused imports: `services/chat_service.py:1` (`HumanMessage`), `tests/conftest.py:4` (`MagicMock`), `tests/test_api.py:1` (`MagicMock`), `graph/nodes/retrieve_context.py:2` (`re`)
+  - `F841` unused variable: `tests/test_ingest.py:208` (`result_v1`)
+  - `UP035`/`UP006` deprecated typing: `graph/state.py:1` (`typing.List`)
+  - `E501` line too long: `config.py:9`, `ingest/policies.py:79,114,141,193`
+  - `I001` unsorted imports: 14 files
+  - `W292` missing trailing newline: 14 files
+  - Dead code: `ingest_controller.py:66-67` defines `_ALL_DOCS_KEY`/`_CONTENT_HASHES_KEY` after they're referenced on lines 36/56 (works due to Python function-level scoping, but misleading)
+- **Remediation:** `ruff check . --fix` handles 33 issues. Manual fixes for the 5 `E501` lines and the `F841`/`UP035` issues.
+
+---
+
+## Summary: Scorecard
+
+| # | Finding | Original | Current | Delta |
+|---|---|---------|----------|---------|-------|
+| 1 | Test coverage narrow | High | Resolved | **Fixed** — 43 tests, graph nodes covered |
+| 2 | process_policy god function | High | High | **Partial** — decomposed into helpers, still monolithic |
+| 3 | Import-time singletons | Medium | Medium | **Marginal** — graph lazy, others still global |
+| 4 | Private Chroma internals | Medium | Resolved | **Fixed** — VectorStoreRepository adapter added |
+| 5 | Health checks misleading | Medium | Resolved | **Fixed** |
+| 6 | No CI/CD | Medium | Medium | **CI added but lint failing** (40 errors) |
+| 7 | Docker/test mismatch | Medium | Resolved | **Fixed** — docker-compose.test.yml + README updated |
+| 8 | Code hygiene | Low | Low | **No change** — 40 ruff violations |
+
+## Priority actions
+
+1. **Run `ruff check . --fix`** then manually fix the 7 remaining issues — unblocks CI.
+2. **Refactor `process_policy`** into a class or explicit parameter-passing for independent testability.
+3. **Move `settings = get_settings()` inside `lifespan`** and accept Redis/vectorstore via FastAPI `Depends`.

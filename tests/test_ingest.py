@@ -8,6 +8,7 @@ Run with:  pytest -v
 import pytest
 import responses as resp
 
+from db.vector import VectorStoreRepository
 from ingest.policies import process_policy
 
 # These are fake S3 URLs. The `responses` library intercepts requests.get()
@@ -181,7 +182,7 @@ def test_chunks_have_correct_metadata(pdf_v1_bytes, ingest_env):
 
     process_policy(FILE_NAME, URL_V1)
 
-    results = vectorstore._collection.get(where={"doc_id": FILE_NAME})
+    results = VectorStoreRepository(vectorstore).get_by_doc_id(FILE_NAME)
     assert len(results["ids"]) > 0
 
     for meta in results["metadatas"]:
@@ -205,11 +206,11 @@ def test_stale_chunks_removed_from_chromadb(pdf_v1_bytes, pdf_v2_bytes, ingest_e
     resp.add(resp.GET, URL_V2, body=pdf_v2_bytes, status=200)
     _, vectorstore = ingest_env
 
-    result_v1 = process_policy(FILE_NAME, URL_V1)
+    process_policy(FILE_NAME, URL_V1)
     result_v2 = process_policy(FILE_NAME, URL_V2)
 
     # check actual ChromaDB state
-    in_db = vectorstore._collection.get(where={"doc_id": FILE_NAME})
+    in_db = VectorStoreRepository(vectorstore).get_by_doc_id(FILE_NAME)
     chunks_in_db = len(in_db["ids"])
 
     # ChromaDB should hold exactly the v2 total — no leftover v1 chunks
@@ -257,7 +258,7 @@ def test_file_too_large_raises_error(pdf_v1_bytes, ingest_env):
     If the downloaded file exceeds max_file_size_mb, raise RuntimeError.
     We patch get_settings() to set the limit to 0 MB so any file triggers it.
     """
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
     resp.add(resp.GET, URL_V1, body=pdf_v1_bytes, status=200)
 
     # create a fake settings object with a 0 MB file size limit

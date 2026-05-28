@@ -6,13 +6,13 @@ import tempfile
 from datetime import datetime, timezone
 
 import requests
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader
 
 from config import get_settings
 from db.redis_client import get_redis
-from db.vector import get_vectorstore, get_chunks_by_doc_id, delete_chunks_by_ids
+from db.vector import VectorStoreRepository, get_vectorstore
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,9 @@ def _check_duplicate_content(redis_client, new_file_hash: str, doc_id: str) -> d
     return None
 
 
-def _build_chunks(file_path: str, doc_id: str, file_name: str, new_file_hash: str, version: str) -> tuple[list[Document], set[str]]:
+def _build_chunks(
+    file_path: str, doc_id: str, file_name: str, new_file_hash: str, version: str
+) -> tuple[list[Document], set[str]]:
     pages = PyPDFLoader(file_path).load()
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
@@ -111,34 +113,41 @@ def _build_chunks(file_path: str, doc_id: str, file_name: str, new_file_hash: st
     return new_chunks, new_hashes
 
 
-def _sync_vectorstore(vs, redis_client, doc_id: str, new_chunks: list[Document], new_hashes: set[str], old_hashes: set[str]) -> tuple[int, int]:
+def _sync_vectorstore(
+    repo: VectorStoreRepository, redis_client, doc_id: str, new_chunks: list[Document],
+    new_hashes: set[str], old_hashes: set[str],
+) -> tuple[int, int]:
     stale = old_hashes - new_hashes
     fresh = new_hashes - old_hashes
 
     removed = 0
     if stale:
-        results = get_chunks_by_doc_id(vs, doc_id)
+        results = repo.get_by_doc_id(doc_id)
         stale_ids = [
             results["ids"][i]
             for i, meta in enumerate(results["metadatas"])
             if meta.get("chunk_hash") in stale
         ]
         if stale_ids:
-            delete_chunks_by_ids(vs, stale_ids)
+            repo.delete_by_ids(stale_ids)
             removed = len(stale_ids)
         logger.info("Removed %d stale chunks for %s", removed, doc_id)
 
     to_add = [c for c in new_chunks if c.metadata["chunk_hash"] in fresh]
     added = 0
     if to_add:
-        vs.add_documents(to_add)
+        repo.add_documents(to_add)
         added = len(to_add)
         logger.info("Added %d new chunks for %s", added, doc_id)
 
     return added, removed
 
 
-def _persist_ingest_status(redis_client, doc_id: str, new_file_hash: str, stored_file_hash: str | None, new_hashes: set[str], added: int, removed: int, total: int, version: str, file_name: str):
+def _persist_ingest_status(
+    redis_client, doc_id: str, new_file_hash: str, stored_file_hash: str | None,
+    new_hashes: set[str], added: int, removed: int, total: int,
+    version: str, file_name: str,
+):
     redis_client.delete(f"doc_chunks:{doc_id}")
     if new_hashes:
         redis_client.sadd(f"doc_chunks:{doc_id}", *new_hashes)
@@ -185,12 +194,15 @@ def process_policy(file_name: str, s3_url: str) -> dict:
         version = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         new_chunks, new_hashes = _build_chunks(file_path, doc_id, file_name, new_file_hash, version)
 
-        vs = get_vectorstore()
+        repo = VectorStoreRepository(get_vectorstore())
         old_hashes = redis_client.smembers(f"doc_chunks:{doc_id}")
 
-        added, removed = _sync_vectorstore(vs, redis_client, doc_id, new_chunks, new_hashes, old_hashes)
+        added, removed = _sync_vectorstore(repo, redis_client, doc_id, new_chunks, new_hashes, old_hashes)
 
-        _persist_ingest_status(redis_client, doc_id, new_file_hash, stored_file_hash, new_hashes, added, removed, len(new_chunks), version, file_name)
+        _persist_ingest_status(
+            redis_client, doc_id, new_file_hash, stored_file_hash,
+            new_hashes, added, removed, len(new_chunks), version, file_name,
+        )
 
         logger.info("Ingested %s — added=%d removed=%d total=%d",
                     doc_id, added, removed, len(new_chunks))

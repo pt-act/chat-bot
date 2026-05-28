@@ -460,16 +460,17 @@ Contributions are welcome! Here's how to get started:
    docker-compose up --build
    ```
    The API will be available at `http://127.0.0.1:8000` and Redis starts automatically.
-   To run tests inside the container:
-   ```bash
-   docker-compose exec api pytest
-   ```
+    To run tests inside the container:
+    ```bash
+    docker-compose -f docker-compose.test.yml up --build -d
+    docker-compose -f docker-compose.test.yml exec api pytest
+    ```
 
 4. **Run the tests** before making changes:
-   ```bash
-   pytest                     # local
-   docker-compose exec api pytest   # Docker
-   ```
+    ```bash
+    pytest                     # local
+    docker-compose -f docker-compose.test.yml exec api pytest   # Docker
+    ```
 5. **Make your changes**, then run tests again to confirm nothing broke
 6. **Open a Pull Request** with a clear description of what you changed and why
 
