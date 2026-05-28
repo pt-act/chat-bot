@@ -6,7 +6,6 @@ Each node is tested in isolation with mocked dependencies.
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from graph.nodes.generate_answer import generate_answer
@@ -15,8 +14,8 @@ from graph.nodes.retrieve_context import retrieve_context
 from graph.nodes.store_memory import store_memory
 from graph.nodes.summarize import summarize
 
-
 # ── load_memory ────────────────────────────────────────────────────────────────
+
 
 class TestLoadMemory:
     @patch("graph.nodes.load_memory.get_redis")
@@ -31,13 +30,15 @@ class TestLoadMemory:
     @patch("graph.nodes.load_memory.get_redis")
     def test_existing_memory_deserializes(self, mock_get_redis):
         mock_redis = MagicMock()
-        mock_redis.get.return_value = json.dumps({
-            "summary": "User likes refunds",
-            "messages": [
-                {"role": "user", "content": "hello"},
-                {"role": "ai", "content": "hi there"},
-            ],
-        })
+        mock_redis.get.return_value = json.dumps(
+            {
+                "summary": "User likes refunds",
+                "messages": [
+                    {"role": "user", "content": "hello"},
+                    {"role": "ai", "content": "hi there"},
+                ],
+            }
+        )
         mock_get_redis.return_value = mock_redis
 
         result = load_memory({"user_id": "u1"})
@@ -50,6 +51,7 @@ class TestLoadMemory:
 
 
 # ── retrieve_context ─────────────────────────────────────────────────────────
+
 
 class TestRetrieveContext:
     @patch("graph.nodes.retrieve_context.get_vectorstore")
@@ -96,6 +98,7 @@ class TestRetrieveContext:
 
 # ── generate_answer ──────────────────────────────────────────────────────────
 
+
 class TestGenerateAnswer:
     @patch("graph.nodes.generate_answer._get_chat")
     def test_generates_answer_in_english(self, mock_get_chat):
@@ -103,13 +106,15 @@ class TestGenerateAnswer:
         mock_llm.invoke.return_value = MagicMock(content="English answer")
         mock_get_chat.return_value = mock_llm
 
-        result = generate_answer({
-            "user_id": "u1",
-            "question": "What is the return policy?",
-            "messages": [],
-            "docs": "Return within 30 days.",
-            "summary": "",
-        })
+        result = generate_answer(
+            {
+                "user_id": "u1",
+                "question": "What is the return policy?",
+                "messages": [],
+                "docs": "Return within 30 days.",
+                "summary": "",
+            }
+        )
 
         assert len(result["messages"]) == 2
         assert isinstance(result["messages"][0], HumanMessage)
@@ -124,13 +129,15 @@ class TestGenerateAnswer:
         mock_llm.invoke.return_value = MagicMock(content="إجابة عربية")
         mock_get_chat.return_value = mock_llm
 
-        result = generate_answer({
-            "user_id": "u1",
-            "question": "ما هي سياسة الإرجاع؟",
-            "messages": [],
-            "docs": "",
-            "summary": "",
-        })
+        result = generate_answer(
+            {
+                "user_id": "u1",
+                "question": "ما هي سياسة الإرجاع؟",
+                "messages": [],
+                "docs": "",
+                "summary": "",
+            }
+        )
 
         assert result["messages"][1].content == "إجابة عربية"
         # verify the prompt included Arabic language instruction
@@ -139,6 +146,7 @@ class TestGenerateAnswer:
 
 
 # ── store_memory ───────────────────────────────────────────────────────────────
+
 
 class TestStoreMemory:
     @patch("graph.nodes.store_memory.get_settings")
@@ -170,6 +178,7 @@ class TestStoreMemory:
 
 
 # ── summarize ──────────────────────────────────────────────────────────────────
+
 
 class TestSummarize:
     @patch("graph.nodes.summarize._get_chat")
@@ -227,6 +236,6 @@ class TestSummarize:
             "summary": "",
         }
 
-        result = summarize(state)
+        summarize(state)
         prompt_arg = mock_llm.invoke.call_args[0][0]
         assert "Arabic" in prompt_arg

@@ -12,6 +12,7 @@ from controllers.ingest_controller import router as ingest_router
 from db.redis_client import get_redis
 from db.vector import get_vectorstore
 from middlewares.logging_setup import setup_logging
+from middlewares.observability import CorrelationIdMiddleware, RequestTimingMiddleware
 from middlewares.rate_limiter import RateLimitMiddleware
 
 settings = get_settings()
@@ -49,7 +50,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Chatbot API", version="1.0.0", lifespan=lifespan)
 
+# Observability (outermost — captures everything)
+app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(RequestTimingMiddleware)
+
+# Rate limiting
 app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -68,6 +76,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"error": "Validation failed", "details": errors})
 
 
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    logger.warning("Value error on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=400, content={"error": "Bad request", "detail": str(exc)})
+
+
+@app.exception_handler(RuntimeError)
+async def runtime_error_handler(request: Request, exc: RuntimeError):
+    logger.error("Runtime error on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=500, content={"error": "Internal server error", "detail": str(exc)})
+
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
@@ -79,6 +99,33 @@ def health_check():
     deps = {"redis": "ok" if _redis_ok else "unavailable", "chromadb": "ok" if _chroma_ok else "unavailable"}
     status = "ok" if (_redis_ok and _chroma_ok) else "degraded"
     return {"status": status, "dependencies": deps}
+
+
+@app.get("/ready")
+def readiness_check():
+    """Live readiness probe — checks actual connectivity right now."""
+    deps = {}
+    all_ok = True
+
+    try:
+        get_redis().ping()
+        deps["redis"] = "ok"
+    except Exception as e:
+        deps["redis"] = f"unavailable: {e}"
+        all_ok = False
+
+    try:
+        get_vectorstore().similarity_search("health", k=1)
+        deps["chromadb"] = "ok"
+    except Exception as e:
+        deps["chromadb"] = f"unavailable: {e}"
+        all_ok = False
+
+    status_code = 200 if all_ok else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ready" if all_ok else "not_ready", "dependencies": deps},
+    )
 
 
 @app.get("/")

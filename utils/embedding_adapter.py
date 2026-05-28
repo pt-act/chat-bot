@@ -11,10 +11,12 @@ def get_embeddings():
 
     if provider == "openai":
         from langchain_openai import OpenAIEmbeddings
+
         return OpenAIEmbeddings(model=model)
 
     elif provider == "huggingface":
         from langchain_huggingface import HuggingFaceEmbeddings
+
         return HuggingFaceEmbeddings(model_name=model)
 
     else:

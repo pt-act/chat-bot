@@ -8,14 +8,17 @@ def get_llm(temperature: float = 0, max_tokens: int = 1000):
 
     if provider == "openai":
         from langchain_openai import ChatOpenAI
+
         return ChatOpenAI(model=model, temperature=temperature, max_tokens=max_tokens)
 
     elif provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
+
         return ChatAnthropic(model=model, temperature=temperature, max_tokens=max_tokens)
 
     elif provider == "groq":
         from langchain_groq import ChatGroq
+
         return ChatGroq(model=model, temperature=temperature, max_tokens=max_tokens)
 
     else:

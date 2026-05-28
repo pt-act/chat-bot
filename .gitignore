@@ -11,6 +11,7 @@ audit_artifacts/
 
 **/__pycache__/
 .personal/
+.agents/
 
 # Virtual environments
 .venv/

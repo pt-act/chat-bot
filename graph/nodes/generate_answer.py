@@ -21,7 +21,7 @@ def _response_language(question: str) -> str:
     Arabic Unicode block: U+0600–U+06FF
     Rule: any Arabic characters present (even mixed) → Arabic, else English.
     """
-    return "Arabic" if re.search(r'[؀-ۿ]', question) else "English"
+    return "Arabic" if re.search(r"[؀-ۿ]", question) else "English"
 
 
 def generate_answer(state):
@@ -32,10 +32,7 @@ def generate_answer(state):
     lang = _response_language(question)
 
     recent = messages[-6:]
-    history = "\n".join(
-        f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}"
-        for m in recent
-    )
+    history = "\n".join(f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in recent)
 
     prompt = build_answer_prompt(
         summary=summary,
@@ -49,7 +46,8 @@ def generate_answer(state):
     logger.info("Generated answer for user %s (lang=%s)", state.get("user_id"), lang)
 
     return {
-        "messages": messages + [
+        "messages": messages
+        + [
             HumanMessage(content=question),
             AIMessage(content=response.content),
         ]

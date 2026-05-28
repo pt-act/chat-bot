@@ -13,6 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from config import get_settings
 from db.redis_client import get_redis
 from db.vector import VectorStoreRepository, get_vectorstore
+from utils.security import SSRFError, validate_download_url
 
 logger = logging.getLogger(__name__)
 
@@ -29,18 +30,21 @@ def _file_hash(file_path: str) -> str:
 
 
 def _chunk_hash(text: str) -> str:
-    return hashlib.md5(text.encode()).hexdigest()
+    return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()
 
 
 def _clean_text(text: str) -> str:
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    text = re.sub(r' {2,}', ' ', text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r" {2,}", " ", text)
     return text.strip()
 
 
 def _download_file(s3_url: str, file_name: str) -> str:
     setting = get_settings()
     max_bytes = setting.max_file_size_mb * 1024 * 1024
+
+    # SSRF guard: validate URL before fetching
+    validate_download_url(s3_url, setting.allowed_hosts)
 
     try:
         response = requests.get(
@@ -81,9 +85,7 @@ def _build_chunks(
 ) -> tuple[list[Document], set[str]]:
     pages = PyPDFLoader(file_path).load()
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=100,
-        separators=["\n\n", "\n", ".", " ", ""]
+        chunk_size=800, chunk_overlap=100, separators=["\n\n", "\n", ".", " ", ""]
     )
     raw_chunks = splitter.split_documents(pages)
 
@@ -97,25 +99,31 @@ def _build_chunks(
 
         ch = _chunk_hash(text)
         new_hashes.add(ch)
-        new_chunks.append(Document(
-            page_content=text,
-            metadata={
-                "doc_id": doc_id,
-                "source_file": file_name,
-                "file_hash": new_file_hash,
-                "chunk_hash": ch,
-                "chunk_index": i,
-                "page_number": raw.metadata.get("page", 0),
-                "version": version,
-            }
-        ))
+        new_chunks.append(
+            Document(
+                page_content=text,
+                metadata={
+                    "doc_id": doc_id,
+                    "source_file": file_name,
+                    "file_hash": new_file_hash,
+                    "chunk_hash": ch,
+                    "chunk_index": i,
+                    "page_number": raw.metadata.get("page", 0),
+                    "version": version,
+                },
+            )
+        )
 
     return new_chunks, new_hashes
 
 
 def _sync_vectorstore(
-    repo: VectorStoreRepository, redis_client, doc_id: str, new_chunks: list[Document],
-    new_hashes: set[str], old_hashes: set[str],
+    repo: VectorStoreRepository,
+    redis_client,
+    doc_id: str,
+    new_chunks: list[Document],
+    new_hashes: set[str],
+    old_hashes: set[str],
 ) -> tuple[int, int]:
     stale = old_hashes - new_hashes
     fresh = new_hashes - old_hashes
@@ -124,9 +132,7 @@ def _sync_vectorstore(
     if stale:
         results = repo.get_by_doc_id(doc_id)
         stale_ids = [
-            results["ids"][i]
-            for i, meta in enumerate(results["metadatas"])
-            if meta.get("chunk_hash") in stale
+            results["ids"][i] for i, meta in enumerate(results["metadatas"]) if meta.get("chunk_hash") in stale
         ]
         if stale_ids:
             repo.delete_by_ids(stale_ids)
@@ -144,9 +150,16 @@ def _sync_vectorstore(
 
 
 def _persist_ingest_status(
-    redis_client, doc_id: str, new_file_hash: str, stored_file_hash: str | None,
-    new_hashes: set[str], added: int, removed: int, total: int,
-    version: str, file_name: str,
+    redis_client,
+    doc_id: str,
+    new_file_hash: str,
+    stored_file_hash: str | None,
+    new_hashes: set[str],
+    added: int,
+    removed: int,
+    total: int,
+    version: str,
+    file_name: str,
 ):
     redis_client.delete(f"doc_chunks:{doc_id}")
     if new_hashes:
@@ -158,16 +171,19 @@ def _persist_ingest_status(
         redis_client.hdel(_CONTENT_HASHES_KEY, stored_file_hash)
     redis_client.hset(_CONTENT_HASHES_KEY, new_file_hash, doc_id)
 
-    redis_client.hset(f"ingest_status:{doc_id}", mapping={
-        "file_hash": new_file_hash,
-        "file_name": file_name,
-        "version": version,
-        "status": "done",
-        "total_chunks": str(total),
-        "added": str(added),
-        "removed": str(removed),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    })
+    redis_client.hset(
+        f"ingest_status:{doc_id}",
+        mapping={
+            "file_hash": new_file_hash,
+            "file_name": file_name,
+            "version": version,
+            "status": "done",
+            "total_chunks": str(total),
+            "added": str(added),
+            "removed": str(removed),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
 
 def process_policy(file_name: str, s3_url: str) -> dict:
@@ -200,12 +216,19 @@ def process_policy(file_name: str, s3_url: str) -> dict:
         added, removed = _sync_vectorstore(repo, redis_client, doc_id, new_chunks, new_hashes, old_hashes)
 
         _persist_ingest_status(
-            redis_client, doc_id, new_file_hash, stored_file_hash,
-            new_hashes, added, removed, len(new_chunks), version, file_name,
+            redis_client,
+            doc_id,
+            new_file_hash,
+            stored_file_hash,
+            new_hashes,
+            added,
+            removed,
+            len(new_chunks),
+            version,
+            file_name,
         )
 
-        logger.info("Ingested %s — added=%d removed=%d total=%d",
-                    doc_id, added, removed, len(new_chunks))
+        logger.info("Ingested %s — added=%d removed=%d total=%d", doc_id, added, removed, len(new_chunks))
 
         return {
             "doc_id": doc_id,
@@ -216,12 +239,18 @@ def process_policy(file_name: str, s3_url: str) -> dict:
             "total": len(new_chunks),
         }
 
+    except SSRFError as e:
+        logger.warning("SSRF blocked for %s: %s", doc_id, e)
+        raise
     except Exception as e:
-        redis_client.hset(f"ingest_status:{doc_id}", mapping={
-            "status": "failed",
-            "error": str(e),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
+        redis_client.hset(
+            f"ingest_status:{doc_id}",
+            mapping={
+                "status": "failed",
+                "error": str(e),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         logger.exception("Ingest failed for %s", doc_id)
         raise
 

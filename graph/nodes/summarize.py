@@ -17,10 +17,8 @@ def _get_chat():
 
 def _summary_language(messages: list) -> str:
     """Use Arabic if any user message contains Arabic characters, else English."""
-    user_text = " ".join(
-        m.content for m in messages if isinstance(m, HumanMessage)
-    )
-    return "Arabic" if re.search(r'[؀-ۿ]', user_text) else "English"
+    user_text = " ".join(m.content for m in messages if isinstance(m, HumanMessage))
+    return "Arabic" if re.search(r"[؀-ۿ]", user_text) else "English"
 
 
 def summarize(state):
@@ -30,10 +28,7 @@ def summarize(state):
         return state
 
     lang = _summary_language(messages)
-    text = "\n".join(
-        f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}"
-        for m in messages
-    )
+    text = "\n".join(f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in messages)
 
     prompt = build_summarize_prompt(text=text, lang=lang)
     summary = _get_chat().invoke(prompt)

@@ -18,6 +18,12 @@ def chat_controller(
         result = conversation(user_id=x_user_id, q=request.q)
         logger.info("Chat response generated for user %s", x_user_id)
         return {"status": "success", "data": result["answer"], "sources": result["sources"]}
+    except ValueError as e:
+        logger.warning("Chat validation error for user %s: %s", x_user_id, e)
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        logger.error("Chat runtime error for user %s: %s", x_user_id, e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception:
         logger.exception("Chat failed for user %s", x_user_id)
         raise HTTPException(status_code=500, detail="Failed to generate a response")

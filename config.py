@@ -1,6 +1,10 @@
+import logging
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -42,7 +46,33 @@ class Settings(BaseSettings):
     # App
     debug: bool = False
     log_level: str = "INFO"
-    cors_origins: list[str] = ["*"]
+    cors_origins: list[str] = []
+
+    # Security
+    api_key: str = ""
+    require_auth_for_ingest: bool = False
+    trusted_proxies: list[str] = []
+    allowed_hosts: list[str] = ["*"]
+
+    @model_validator(mode="after")
+    def check_api_keys(self):
+        """Fail fast if the chosen provider's API key is missing."""
+        provider = self.llm_provider.lower()
+        if provider == "openai" and not self.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+        if provider == "anthropic" and not self.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic")
+        if provider == "groq" and not self.groq_api_key:
+            raise ValueError("GROQ_API_KEY is required when LLM_PROVIDER=groq")
+        return self
+
+    @model_validator(mode="after")
+    def check_cors(self):
+        """Warn when permissive CORS is configured."""
+        if "*" in self.cors_origins:
+            logger.warning("CORS_ORIGINS contains '*'. This allows any origin to access the API.")
+        return self
+
 
 # What lru_cache does
 # It means:

@@ -6,10 +6,12 @@ _graph = lru_cache(maxsize=1)(build_graph)
 
 
 def conversation(user_id: str, q: str):
-    result = _graph().invoke({
-        "user_id": user_id,
-        "question": q,
-    })
+    result = _graph().invoke(
+        {
+            "user_id": user_id,
+            "question": q,
+        }
+    )
 
     return {
         "answer": result["messages"][-1].content,

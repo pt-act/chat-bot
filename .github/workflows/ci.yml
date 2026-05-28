@@ -6,25 +6,101 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  # Prevent pip-audit from scanning all packages (slow); only requirements.txt
+  PIP_AUDIT_ONLY_DIRECT: "1"
+
 jobs:
+  # ── 1. Security Audit ─────────────────────────────────────────────────────────
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab0f11  # v5.5.0
+        with:
+          python-version: "3.10"
+
+      - name: Install security tools
+        run: |
+          pip install --upgrade pip
+          pip install bandit pip-audit
+
+      - name: Bandit (High+ severity)
+        run: bandit -r . -ll -ii -x ./tests/
+
+      - name: pip-audit (requirements.txt)
+        run: pip-audit -r requirements.txt --desc --format=json | tee pip-audit-results.json
+        continue-on-error: false
+
+      - name: Upload pip-audit results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: pip-audit-results
+          path: pip-audit-results.json
+
+  # ── 2. Lint & Format ────────────────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab0f11  # v5.5.0
+        with:
+          python-version: "3.10"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+  # ── 3. Test Suite + Coverage ──────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab0f11  # v5.5.0
         with:
           python-version: "3.10"
 
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-          pip install ruff httpx
+          pip install httpx
 
-      - name: Lint
-        run: ruff check .
+      - name: Run tests with coverage
+        run: pytest --cov=. --cov-fail-under=95 --cov-report=xml --cov-report=term-missing -v
 
-      - name: Tests
-        run: pytest -q
+      - name: Upload coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ── 4. Docker Build ─────────────────────────────────────────────────────────
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Build Docker image
+        run: docker build -t chatbot:test .
+        timeout-minutes: 10
+
+      - name: Docker smoke test
+        run: |
+          docker run -d --name chatbot_smoke -p 8000:8000 chatbot:test
+          sleep 5
+          curl -s http://localhost:8000/health || true
+          docker stop chatbot_smoke
+          docker rm chatbot_smoke

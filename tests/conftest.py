@@ -134,6 +134,8 @@ def vectorstore(tmp_path):
 
 @pytest.fixture
 def ingest_env(fake_redis, vectorstore):
-    with patch("ingest.policies.get_redis", return_value=fake_redis), \
-         patch("ingest.policies.get_vectorstore", return_value=vectorstore):
+    with (
+        patch("ingest.policies.get_redis", return_value=fake_redis),
+        patch("ingest.policies.get_vectorstore", return_value=vectorstore),
+    ):
         yield fake_redis, vectorstore
