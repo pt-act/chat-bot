@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 
 from db.redis_client import get_redis
 from db.vector import delete_chunks_by_ids, get_chunks_by_doc_id, get_vectorstore
@@ -19,28 +19,42 @@ router = APIRouter(tags=["ingest"])
 @router.post(
     "/ingest",
     response_model=IngestResult,
+    response_model_exclude_none=True,
+    status_code=202,
     dependencies=[Depends(require_api_key)],
-    summary="Ingest a policy PDF",
+    summary="Queue a policy PDF for ingestion",
+    description=(
+        "Accepts the document and processes it in the background. Returns 202 with "
+        "`status=queued`; poll `GET /ingest/status/{doc_id}` for progress."
+    ),
 )
-def ingest(request: IngestRequest) -> IngestResult:
-    try:
-        result = ingest_file(request.file_name, str(request.s3_url))
-    except ValueError as e:
-        logger.warning("Ingest validation failed for %s: %s", request.file_name, e)
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except RuntimeError as e:
-        logger.error("Ingest runtime error for %s: %s", request.file_name, e)
-        raise HTTPException(status_code=500, detail="Failed to ingest file") from e
-    return IngestResult(**result)
+def ingest(request: IngestRequest, background: BackgroundTasks, response: Response) -> IngestResult:
+    # file_name is validated to contain no dots, so it equals the doc_id used by the
+    # ingest pipeline (process_policy does file_name.removesuffix(".pdf")).
+    doc_id = request.file_name
+    redis = get_redis()
+    redis.hset(ingest_status_key(doc_id), mapping={"doc_id": doc_id, "status": "queued", "file_name": doc_id})
+    redis.sadd(ALL_DOCS_KEY, doc_id)
+
+    background.add_task(ingest_file, request.file_name, str(request.s3_url))
+    response.headers["Location"] = f"/api/v1/ingest/status/{doc_id}"
+    logger.info("Queued ingest for %s", doc_id)
+    return IngestResult(doc_id=doc_id, status="queued")
 
 
-@router.get("/ingest/status/{doc_id}", response_model=IngestResult, summary="Get ingest status")
+@router.get(
+    "/ingest/status/{doc_id}",
+    response_model=IngestResult,
+    response_model_exclude_none=True,
+    summary="Get ingest status",
+)
 def ingest_status(doc_id: str) -> IngestResult:
     redis = get_redis()
     status = redis.hgetall(ingest_status_key(doc_id))
     if not status:
         raise HTTPException(status_code=404, detail=f"No record found for '{doc_id}'")
-    return IngestResult(doc_id=doc_id, **{k: v for k, v in status.items() if k in IngestResult.model_fields})
+    extra = {k: v for k, v in status.items() if k in IngestResult.model_fields and k != "doc_id"}
+    return IngestResult(doc_id=doc_id, **extra)
 
 
 @router.get(
@@ -49,11 +63,16 @@ def ingest_status(doc_id: str) -> IngestResult:
     dependencies=[Depends(require_api_key)],
     summary="List ingested documents",
 )
-def list_docs() -> DocsListResponse:
+def list_docs(
+    limit: int = Query(50, ge=1, le=200, description="Max docs to return."),
+    cursor: int = Query(0, ge=0, description="Offset cursor from a previous page's next_cursor."),
+) -> DocsListResponse:
     redis = get_redis()
-    doc_ids = redis.smembers(ALL_DOCS_KEY)
-    docs = [redis.hgetall(ingest_status_key(doc_id)) for doc_id in doc_ids]
-    return DocsListResponse(total=len(docs), docs=docs, next_cursor=None)
+    all_ids = sorted(redis.smembers(ALL_DOCS_KEY))  # stable order for deterministic paging
+    page = all_ids[cursor : cursor + limit]
+    docs = [redis.hgetall(ingest_status_key(doc_id)) for doc_id in page]
+    next_cursor = str(cursor + limit) if cursor + limit < len(all_ids) else None
+    return DocsListResponse(total=len(all_ids), docs=docs, next_cursor=next_cursor)
 
 
 @router.delete(
