@@ -1,9 +1,10 @@
 import hashlib
 import logging
 
+from langchain_core.documents import Document
+
 from config import get_settings
 from db.vector import get_vectorstore
-from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 

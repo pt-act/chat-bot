@@ -422,7 +422,7 @@ class TestLLMAdapterEdgeCases:
         )
         with patch("langchain_openai.ChatOpenAI") as mock_cls:
             mock_cls.return_value = MagicMock()
-            result = get_llm()
+            get_llm()
             _, call_kwargs = mock_cls.call_args_list[0]
             assert call_kwargs["api_key"] == "sk-or-key"
 
@@ -436,7 +436,7 @@ class TestLLMAdapterEdgeCases:
         )
         with patch("langchain_openai.ChatOpenAI") as mock_cls:
             mock_cls.return_value = MagicMock()
-            result = get_llm()
+            get_llm()
             _, call_kwargs = mock_cls.call_args_list[0]
             assert call_kwargs["api_key"] == "no-key-needed"
 
@@ -450,7 +450,7 @@ class TestLLMAdapterEdgeCases:
         )
         with patch("langchain_openai.ChatOpenAI") as mock_cls:
             mock_cls.return_value = MagicMock()
-            result = get_llm()
+            get_llm()
             _, call_kwargs = mock_cls.call_args_list[0]
             assert "base_url" not in call_kwargs
             assert "api_key" not in call_kwargs
@@ -488,7 +488,7 @@ class TestLLMAdapterEdgeCases:
         )
         with patch("langchain_openai.ChatOpenAI") as mock_cls:
             mock_cls.return_value = MagicMock()
-            result = get_llm()
+            get_llm()
             mock_cls.assert_called_once()
 
 

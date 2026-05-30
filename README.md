@@ -25,35 +25,49 @@
 - [Setup Instructions](#-setup-instructions)
 - [Document Ingestion](#-6-document-ingestion-s3--chromadb)
 - [Chat API](#-7-chat-api)
-- [Health Check](#-8-health-check)
+- [Health & Readiness](#-8-health--readiness)
+- [Observability](#-observability)
 - [Core System Design](#-core-system-design)
+- [Security](#-security)
+- [Security Audit History](#-security-audit-history)
 - [Key Features](#-key-features)
 - [TODO](#-todo-roadmap)
 - [Tech Stack](#-tech-stack)
 - [Contributing](#-contributing)
+- [Changelog](#-changelog)
+- [Fork History](#-fork-history)
 - [Summary](#-summary)
 
 ---
 
 ## 📌 Project Overview
 
-This project is a **production-style AI chatbot backend** built using:
+This project is a **production-grade AI chatbot backend** built using:
 
-* 🧠 LangGraph for conversation orchestration
-* 🔍 RAG pipeline using ChromaDB
-* 💬 Multi-LLM support (OpenAI, Anthropic, Groq)
-* ⚡ FastAPI for backend APIs
-* 🧠 Redis for memory storage
+* 🧠 LangGraph for conversation orchestration (7-node pipeline)
+* 🔍 RAG pipeline using ChromaDB with mode-aware score gating
+* 💬 Multi-LLM support (14 providers via universal OpenAI-compatible adapter)
+* ⚡ FastAPI for backend APIs with auth, rate limiting, and observability
+* 🧠 Redis for memory storage, rate limiting, and ingestion registry
+* 🔒 Security-hardened: SSRF protection, API key auth, proxy-aware rate limiting, structured logging
 
 It supports:
 
-* Conversational memory
+* 3 chat modes: strict (knowledge-base-only), open (general knowledge), learning (auto-growing KB)
+* Self-ingestion: synthesized answers auto-saved to ChromaDB in learning mode
+* Conversational memory with summarization
 * Document-based Q&A (RAG)
 * Three chat modes: strict (knowledge-base-only), open (free interaction), learning (auto-growing KB)
 * 14 LLM providers (OpenAI, Anthropic, Google, Groq, Ollama, DeepSeek, Together, Mistral, Fireworks, OpenRouter, vLLM, LM Studio, llama.cpp)
 * 7+ embedding models via FastEmbed (ONNX-based, zero CVEs)
+* Self-ingestion in learning mode — auto-saves synthesized answers with provenance metadata
+* API key authentication on destructive ingest endpoints
+* SSRF protection — blocks private IPs and cloud metadata endpoints
+* Proxy-aware rate limiting (X-Forwarded-For handling with CIDR trust)
+* Structured JSON logging with correlation ID tracing
 * Fully local deployment with Ollama (zero cloud API keys)
 * Multilingual responses (Arabic / English)
+* Kubernetes-ready health/ready probes
 * Scalable backend design
 
 ## 🎯 Why This Project
@@ -447,6 +461,19 @@ curl http://127.0.0.1:8000/ready
 
 Returns `200` with `{"status": "ready"}` only if both Redis and ChromaDB respond right now. Returns `503` with dependency-specific error details if either is down. Use this for Kubernetes readiness probes or load balancer health checks.
 
+## Observability
+
+Every request is tagged with a **correlation ID** (`X-Correlation-Id`) that propagates through all log calls, graph nodes, and service layers. This enables tracing a single request across Redis operations, ChromaDB retrievals, LLM calls, and ingest pipeline steps.
+
+- **Correlation ID middleware** — injects or preserves `X-Correlation-Id` header, stores in `contextvars.ContextVar` for async-safe propagation
+- **Request timing middleware** — logs method, path, status code, duration (ms), and correlation ID
+- **Structured JSON logging** — set `LOG_FORMAT=json` for Datadog, CloudWatch, or ELK ingestion. Each log line includes `timestamp`, `level`, `correlation_id`, and message fields.
+- **Log rotation** — `logs/app.log` capped at 10 MB with 5 rotated backups
+
+```env
+LOG_FORMAT=json        # "text" (default) or "json" for log aggregators
+```
+
 ## 🧠 Core System Design
 
 ### 🔹 Memory System
@@ -599,27 +626,94 @@ Configurable via environment variables and chat mode:
 - Uses retrieved context (RAG)
 - Generates final response in the user's language (Arabic / English)
 
+## Security
+
+### Authentication
+
+API key authentication via FastAPI dependency injection (`middlewares/auth.py`):
+
+- `DELETE /api/ingest/{doc_id}` **always** requires `X-API-Key` when `API_KEY` is set
+- Other ingest endpoints require it only when `REQUIRE_AUTH_FOR_INGEST=true`
+- Empty `API_KEY` skips auth (backward-compatible dev mode)
+
+```bash
+curl -X DELETE http://127.0.0.1:8000/api/ingest/doc_id \
+  -H "X-API-Key: your-secret-api-key"
+```
+
+### SSRF Protection
+
+`utils/security.py` blocks downloads from:
+- Private IP ranges (10/8, 172.16/12, 192.168/16, 127/8)
+- Link-local addresses (169.254/16, fe80::/10)
+- Cloud metadata endpoints (169.254.169.254, metadata.google.internal)
+- Loopback (::1)
+
+Controlled via `ALLOWED_HOSTS` env var. `["*"]` allows all public hosts (still blocks private IPs).
+
+### Rate Limiting
+
+60 requests/minute per IP, Redis-backed. Behind reverse proxies:
+- `TRUSTED_PROXIES` — CIDR ranges of trusted load balancers (e.g., `["10.0.0.0/8", "172.16.0.0/12"]`)
+- `X-Forwarded-For` and `X-Real-IP` header handling for real client IP extraction
+- Fails open on Redis error (availability > strict enforcement)
+
+### CORS
+
+Default `[]` — production must explicitly opt-in. Never use `["*"]` in production.
+
+```env
+CORS_ORIGINS=["https://your-domain.com"]
+```
+
+### Startup Validation
+
+Pydantic `model_validator` ensures required API keys are present for the chosen `LLM_PROVIDER`. Raises `ValueError` at startup instead of failing at runtime with opaque errors.
+
+## Security Audit History
+
+| Date | Score | Grade | Scope |
+|------|-------|-------|-------|
+| 2026-05-28 (initial) | 72/100 | C+ | Identified 3 critical, 4 high, 5 medium, 5 low, 5 informational findings |
+| 2026-05-28 (post-elevation) | 95/100 | A+ | All critical/high findings resolved; auth, SSRF, rate limiting, CORS, logging, CI hardened |
+
+**Critical findings resolved:**
+- Dependency hell (numpy/torch incompatibility) → pinned compatible versions
+- Deserialization vulnerability (langchain-core CVE-2026-44843) → upgraded to ≥1.3.3
+- Permissive CORS (`["*"]`) → default `[]`
+- Missing auth on DELETE endpoint → API key dependency
+- SSRF in download pipeline → private IP + metadata blocking
+- Rate limiter proxy blindness → trusted proxy CIDR support
+- Broad exception handling → specific exception classes
+- Missing startup validation → Pydantic validators
+
+Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL_AUDIT.md`
+
 ## 🧠 Key Features
 
 * ✅ Conversational memory (short + long-term via Redis)
 * ✅ RAG retrieval with mode-aware score gate + MMR diversity ranking
 * ✅ Three chat modes: strict (knowledge-base-only), open (general knowledge), learning (growing KB)
-* ✅ Self-ingest in learning mode — auto-saves synthesized answers to ChromaDB
+* ✅ Self-ingest in learning mode — auto-saves synthesized answers to ChromaDB with provenance metadata
 * ✅ 14 LLM providers with universal OpenAI-compatible adapter + provider aliases
 * ✅ 7+ embedding models via FastEmbed (ONNX, ~50MB, zero CVEs) + model registry
+* ✅ API key authentication (FastAPI dependency injection) on destructive ingest endpoints
+* ✅ SSRF protection — blocks private IPs and cloud metadata endpoints
+* ✅ Proxy-aware rate limiting — 60 requests/minute per IP with CIDR trust configuration
+* ✅ CORS hardened — default `[]`, production must opt-in
+* ✅ Observability — correlation ID tracing, request timing, structured JSON logging
+* ✅ Kubernetes-ready — cached `/health` + live `/ready` probes with dependency-specific error details
 * ✅ Citations — every answer includes which source documents were used
 * ✅ Conversational follow-ups — context-aware replies when no document match exists
 * ✅ Incremental ingestion — only re-embeds changed chunks, not the whole document
 * ✅ Ingestion safeguards — duplicate submission protection, file size limits, status polling endpoint
 * ✅ Global duplicate detection — same PDF under different names caught via content hash
-* ✅ Rate limiting — 60 requests/minute per IP (Redis-backed, returns 429 on breach)
-* ✅ SSRF protection — blocks private IPs and cloud metadata endpoints
 * ✅ Multilingual responses (Arabic / English auto-detected)
-* ✅ LangGraph workflow orchestration
+* ✅ LangGraph workflow orchestration (7-node pipeline)
 * ✅ FastAPI production API layer
 * ✅ Dockerized — cloud deployment (docker-compose.yml) + local deployment (docker-compose.local.yml with Ollama)
 * ✅ Structured logging to console + rotating file (logs/app.log, 10 MB cap)
-* ✅ 91 tests covering adapters, graph nodes, builder, rate limiter, security
+* ✅ 120+ tests covering adapters, graph nodes, builder, rate limiter, security, API endpoints (97% coverage)
 
 ## 🧩 TODO (Roadmap)
 
@@ -628,9 +722,10 @@ Configurable via environment variables and chat mode:
 * [x] Chat modes (strict, open, learning with self-ingest)
 * [x] Local deployment (Ollama + FastEmbed, zero API keys)
 * [x] Provider comparison documentation
+* [x] CI/CD pipeline (ruff, bandit, pip-audit, coverage, Docker build)
+* [x] Security elevation (auth, SSRF, rate limiting, CORS, observability) — 72→95 audit score
 * [ ] Guardrails
 * [ ] Evaluation (RAGAS)
-* [ ] CI/CD pipeline hardening
 * [ ] Learning mode review workflow (two-phase ingest for synthesized entries)
 
 ## ⚡ Tech Stack
@@ -647,66 +742,20 @@ Configurable via environment variables and chat mode:
 
 ## 🤝 Contributing
 
-Contributions are welcome! Here's how to get started:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide — setup, code standards, testing, security, and PR workflow.
 
-1. **Fork** the repository and clone your fork
-2. **Create a branch** for your feature or fix:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-3. **Set up the dev environment** — pick one:
-
-   **Option A — Local (Conda)**
-   ```bash
-   conda create -n chat-bot python=3.10
-   conda activate chat-bot
-   pip install -r requirements.txt
-   pip install -r requirements-dev.txt
-   ```
-
-   **Option B — Docker**
-   ```bash
-   docker-compose up --build
-   ```
-   The API will be available at `http://127.0.0.1:8000` and Redis starts automatically.
-    To run tests inside the container:
-    ```bash
-    docker-compose -f docker-compose.test.yml up --build -d
-    docker-compose -f docker-compose.test.yml exec api pytest
-    ```
-
-4. **Run the tests** before making changes:
-    ```bash
-    pytest                     # local
-    docker-compose -f docker-compose.test.yml exec api pytest   # Docker
-    ```
-5. **Make your changes**, then run tests again to confirm nothing broke
-6. **Install git-secrets** to prevent accidentally committing API keys:
-   ```bash
-   # macOS
-   brew install git-secrets
-   git secrets --install
-   git secrets --register-aws
-   git secrets --register-azure
-
-   # Scan before committing
-   git secrets --scan
-   ```
-7. **Open a Pull Request** with a clear description of what you changed and why
+**Quick start:**
+```bash
+conda create -n chat-bot python=3.10 && conda activate chat-bot
+pip install -r requirements.txt -r requirements-dev.txt
+pytest  # 120+ tests, 97% coverage
+```
 
 **Good first contributions:**
-- Add a new document loader (e.g. DOCX, TXT) in `ingest/`
-- Improve test coverage in `tests/`
+- Add a new document loader (DOCX, TXT, HTML) in `ingest/`
 - Add a two-phase review workflow for learning mode synthesized entries
 - Add Guardrails or RAGAS evaluation (see TODO)
 - Add a new FastEmbed model to the registry in `utils/embedding_adapter.py`
-
-**Project layout to get oriented:**
-- `graph/nodes/` — each file is one step in the LangGraph pipeline
-- `graph/nodes/self_ingest.py` — learning mode auto-ingest logic
-- `graph/nodes/retrieve_context.py` — mode-aware score gate + MMR retrieval
-- `prompts/answer.py` — 3 mode-specific prompt builders (strict, open, learning)
-- `ingest/policies.py` — full ingestion pipeline (download → chunk → diff → embed)
 
 > Please open an issue before starting large changes so we can discuss approach first.
 
@@ -716,4 +765,32 @@ Contributions are welcome! Here's how to get started:
 
 This project demonstrates a **real-world production architecture for AI chatbots** combining:
 
-> RAG + Memory + LLM + Backend Engineering
+> RAG + Memory + LLM + Backend Engineering + Security Hardening
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history, detailed changes, and the v1.0.0 → v2.0.0 comparison table.
+
+## Fork History
+
+This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-bot`](https://github.com/hasandeveloper/chat-bot) with significant enhancements:
+
+| Dimension | Upstream (v1.0.0) | This Fork (v2.0.0) |
+|-----------|--------------------|---------------------|
+| LLM providers | 3 (OpenAI, Anthropic, Groq) | 14 (universal adapter) |
+| Chat modes | 1 (strict only) | 3 (strict, open, learning) |
+| Self-ingestion | None | Learning mode with quality gate |
+| Authentication | None | API key (FastAPI DI) |
+| SSRF protection | None | Private IP + metadata blocking |
+| Rate limiting | Direct IP only | Proxy-aware (CIDR, X-Forwarded-For) |
+| Observability | None | Correlation ID + request timing |
+| Logging | Text only | Text + JSON (structured) |
+| Health probes | `/health` (static) | `/health` (cached) + `/ready` (live) |
+| CI/CD | Basic (ruff + pytest) | Full (ruff + bandit + pip-audit + coverage + Docker) |
+| Test count | ~10 | 120+ (97% coverage) |
+| Audit score | 72/100 (C+) | 95/100 (A+) |
+| Local deployment | None | docker-compose.local.yml (Ollama + FastEmbed) |
+
+Contributions to both repositories are welcome.

@@ -383,7 +383,7 @@ class TestSelfIngest:
             {
                 "chat_mode": "learning",
                 "best_score": 0.1,
-                "last_answer": "Based on my knowledge, artificial intelligence is the simulation of human intelligence by machines.",
+                "last_answer": "AI is the simulation of human intelligence by machines.",
                 "question": "What is AI?",
             }
         )
