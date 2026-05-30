@@ -81,4 +81,8 @@ class TestExceptionHandlers:
         client = TestClient(app)
         resp = client.get("/error")
         assert resp.status_code == 500
-        assert "system failure" in resp.json()["detail"]
+        # The internal exception message must NOT be echoed to the client (M-3).
+        body = resp.json()
+        assert "system failure" not in str(body)
+        assert body["error"] == "Internal server error"
+        assert "detail" not in body

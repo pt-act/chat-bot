@@ -4,7 +4,7 @@ import logging
 from langchain_core.messages import AIMessage, HumanMessage
 
 from config import get_settings
-from db.redis_client import get_redis
+from db.redis_client import get_redis, memory_key
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def store_memory(state):
     }
 
     ttl = get_settings().redis_ttl_seconds
-    redis.set(state["user_id"], json.dumps(data), ex=ttl)
+    redis.set(memory_key(state["user_id"]), json.dumps(data), ex=ttl)
     logger.info("Stored memory for user %s (TTL=%ds)", state["user_id"], ttl)
 
     return state

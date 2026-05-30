@@ -3,7 +3,7 @@ import logging
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from db.redis_client import get_redis
+from db.redis_client import get_redis, memory_key
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 def load_memory(state):
     redis = get_redis()
     user_id = state["user_id"]
-    data = redis.get(user_id)
+    data = redis.get(memory_key(user_id))
 
     if not data:
         return {"messages": [], "summary": ""}

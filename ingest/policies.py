@@ -13,12 +13,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from config import get_settings
 from db.redis_client import get_redis
 from db.vector import VectorStoreRepository, get_vectorstore
+from ingest.keys import ALL_DOCS_KEY, CONTENT_HASHES_KEY, doc_chunks_key, ingest_status_key
 from utils.security import SSRFError, validate_download_url
 
 logger = logging.getLogger(__name__)
-
-_ALL_DOCS_KEY = "ingest:doc_ids"
-_CONTENT_HASHES_KEY = "ingest:content_hashes"
 
 
 def _file_hash(file_path: str) -> str:
@@ -74,7 +72,7 @@ def _download_file(s3_url: str, file_name: str) -> str:
 
 
 def _check_duplicate_content(redis_client, new_file_hash: str, doc_id: str) -> dict | None:
-    existing_doc_id = redis_client.hget(_CONTENT_HASHES_KEY, new_file_hash)
+    existing_doc_id = redis_client.hget(CONTENT_HASHES_KEY, new_file_hash)
     if existing_doc_id and existing_doc_id != doc_id:
         return {
             "doc_id": doc_id,
@@ -165,18 +163,18 @@ def _persist_ingest_status(
     version: str,
     file_name: str,
 ):
-    redis_client.delete(f"doc_chunks:{doc_id}")
+    redis_client.delete(doc_chunks_key(doc_id))
     if new_hashes:
-        redis_client.sadd(f"doc_chunks:{doc_id}", *new_hashes)
+        redis_client.sadd(doc_chunks_key(doc_id), *new_hashes)
 
-    redis_client.sadd(_ALL_DOCS_KEY, doc_id)
+    redis_client.sadd(ALL_DOCS_KEY, doc_id)
 
     if stored_file_hash:
-        redis_client.hdel(_CONTENT_HASHES_KEY, stored_file_hash)
-    redis_client.hset(_CONTENT_HASHES_KEY, new_file_hash, doc_id)
+        redis_client.hdel(CONTENT_HASHES_KEY, stored_file_hash)
+    redis_client.hset(CONTENT_HASHES_KEY, new_file_hash, doc_id)
 
     redis_client.hset(
-        f"ingest_status:{doc_id}",
+        ingest_status_key(doc_id),
         mapping={
             "file_hash": new_file_hash,
             "file_name": file_name,
@@ -202,7 +200,7 @@ def process_policy(file_name: str, s3_url: str) -> dict:
         file_path = _download_file(s3_url, file_name)
 
         new_file_hash = _file_hash(file_path)
-        stored_file_hash = redis_client.hget(f"ingest_status:{doc_id}", "file_hash")
+        stored_file_hash = redis_client.hget(ingest_status_key(doc_id), "file_hash")
 
         if stored_file_hash == new_file_hash:
             logger.info("Skipping %s — file unchanged", doc_id)
@@ -217,7 +215,7 @@ def process_policy(file_name: str, s3_url: str) -> dict:
         new_chunks, new_hashes = _build_chunks(file_path, doc_id, file_name, new_file_hash, version)
 
         repo = VectorStoreRepository(get_vectorstore())
-        old_hashes = redis_client.smembers(f"doc_chunks:{doc_id}")
+        old_hashes = redis_client.smembers(doc_chunks_key(doc_id))
 
         added, removed = _sync_vectorstore(repo, redis_client, doc_id, new_chunks, new_hashes, old_hashes)
 
@@ -250,7 +248,7 @@ def process_policy(file_name: str, s3_url: str) -> dict:
         raise
     except Exception as e:
         redis_client.hset(
-            f"ingest_status:{doc_id}",
+            ingest_status_key(doc_id),
             mapping={
                 "status": "failed",
                 "error": str(e),
