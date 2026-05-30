@@ -132,10 +132,23 @@ def vectorstore(tmp_path):
     )
 
 
+def _public_getaddrinfo(host, *args, **kwargs):
+    """Resolve any host to a fixed public IP so ingest tests stay hermetic.
+
+    The SSRF guard (utils.security.validate_download_url) now performs a real DNS
+    lookup to block hosts that resolve to private/metadata IPs. Ingest tests mock
+    all HTTP via the `responses` library but do not control DNS, so we pin
+    resolution to a public address here. Tests that exercise the *blocking*
+    behaviour patch getaddrinfo themselves (see tests/test_security.py).
+    """
+    return [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+
 @pytest.fixture
 def ingest_env(fake_redis, vectorstore):
     with (
         patch("ingest.policies.get_redis", return_value=fake_redis),
         patch("ingest.policies.get_vectorstore", return_value=vectorstore),
+        patch("utils.security.socket.getaddrinfo", _public_getaddrinfo),
     ):
         yield fake_redis, vectorstore

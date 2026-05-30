@@ -6,6 +6,13 @@ logs/*.log.*
 .DS_Store
 __pycache__
 *.pyc
+
+# Test / coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
 .agents/
 audit_artifacts/
 
