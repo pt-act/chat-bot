@@ -1,9 +1,23 @@
 import logging
 
 from config import get_settings
-from db.vector import get_vectorstore
+from db.vector import get_synthesized_vectorstore, get_vectorstore
 
 logger = logging.getLogger(__name__)
+
+
+def _search_synthesized(question: str, k: int = 3) -> list:
+    """Best-effort lookup of previously self-ingested answers (learning mode only).
+
+    Lives in a separate Chroma collection (see db.vector.get_synthesized_vectorstore).
+    Returns [] on any error (e.g. the collection does not exist yet) so retrieval
+    never fails because of the optional synthesized store.
+    """
+    try:
+        return get_synthesized_vectorstore().similarity_search(question, k=k)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("Synthesized-store lookup failed: %s", e)
+        return []
 
 
 def _source_of(doc) -> str:
@@ -35,6 +49,10 @@ def retrieve_context(state):
     # Open/learning mode with low scores: provide best available matches (may be weak)
     if chat_mode != "strict" and best_score < threshold:
         docs = vs.similarity_search(question, k=3)
+        # Learning mode additionally draws on previously synthesized answers, which
+        # live in a separate collection. Strict/open never see synthesized content.
+        if chat_mode == "learning":
+            docs = docs + _search_synthesized(question, k=3)
         context = "\n\n".join(d.page_content for d in docs) if docs else ""
         sources = list({_source_of(d) for d in docs}) if docs else []
         logger.info("Open/learning mode: providing %d low-score docs (best=%.3f)", len(docs), best_score)

@@ -4,7 +4,7 @@ import logging
 from langchain_core.documents import Document
 
 from config import get_settings
-from db.vector import get_vectorstore
+from db.vector import get_synthesized_vectorstore
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,8 @@ def self_ingest(state):
         },
     )
 
-    vs = get_vectorstore()
+    # Store in the SEPARATE synthesized collection — never the authoritative one.
+    vs = get_synthesized_vectorstore()
     vs.add_documents([doc])
 
     logger.info(

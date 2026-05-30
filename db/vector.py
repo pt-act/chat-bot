@@ -4,14 +4,29 @@ from config import get_settings
 from utils.embedding_adapter import get_embeddings
 
 
-def get_vectorstore() -> Chroma:
+def get_vectorstore(collection_name: str | None = None) -> Chroma:
+    """Return the authoritative vector store, or a named collection when given.
+
+    `collection_name=None` uses the configured authoritative collection. The
+    synthesized-answers store lives in the same persist directory under a
+    different collection name (see get_synthesized_vectorstore).
+    """
     setting = get_settings()
     return Chroma(
-        collection_name=setting.chroma_collection,
+        collection_name=collection_name or setting.chroma_collection,
         persist_directory=setting.chroma_persist_dir,
         embedding_function=get_embeddings(),
         collection_metadata={"hnsw:space": "cosine"},
     )
+
+
+def get_synthesized_vectorstore() -> Chroma:
+    """Vector store for unverified, model-synthesized (learning-mode) answers.
+
+    Kept separate from the authoritative collection so synthesized content can
+    never surface in strict/open retrieval.
+    """
+    return get_vectorstore(get_settings().synthesized_collection)
 
 
 class VectorStoreRepository:
