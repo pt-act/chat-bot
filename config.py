@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Vector DB
     chroma_persist_dir: str = "./chroma_db"
     chroma_collection: str = "policies"
+    # Self-ingested (learning-mode) answers go in a SEPARATE collection so unverified,
+    # model-synthesized content never pollutes authoritative strict/open retrieval.
+    synthesized_collection: str = "synthesized_answers"
 
     # Retrieval
     # Minimum similarity score (0.0–1.0) a chunk must reach to be passed to the LLM.

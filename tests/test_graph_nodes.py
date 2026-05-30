@@ -114,9 +114,10 @@ class TestRetrieveContext:
         assert result["sources"] == ["doc.pdf"]
         assert result["best_score"] == 0.2
 
+    @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
-    def test_learning_mode_returns_low_score_docs(self, mock_settings, mock_get_vs):
+    def test_learning_mode_returns_low_score_docs(self, mock_settings, mock_get_vs, mock_get_synth):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
         vs = MagicMock()
         vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.15)]
@@ -125,6 +126,10 @@ class TestRetrieveContext:
         doc1.metadata = {"source": "doc.pdf"}
         vs.similarity_search.return_value = [doc1]
         mock_get_vs.return_value = vs
+        # No previously synthesized answers for this question.
+        synth = MagicMock()
+        synth.similarity_search.return_value = []
+        mock_get_synth.return_value = synth
 
         result = retrieve_context({"question": "test", "chat_mode": "learning"})
         assert result["docs"] == "partial match"
@@ -340,21 +345,21 @@ class TestSummarize:
 
 class TestSelfIngest:
     @patch("graph.nodes.self_ingest.get_settings")
-    @patch("graph.nodes.self_ingest.get_vectorstore")
+    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
     def test_strict_mode_skips_ingest(self, mock_get_vs, mock_settings):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
         result = self_ingest({"chat_mode": "strict", "best_score": 0.1, "last_answer": "Short", "question": "test"})
         assert result == {"self_ingested": False}
 
     @patch("graph.nodes.self_ingest.get_settings")
-    @patch("graph.nodes.self_ingest.get_vectorstore")
+    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
     def test_open_mode_skips_ingest(self, mock_get_vs, mock_settings):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
         result = self_ingest({"chat_mode": "open", "best_score": 0.1, "last_answer": "Short", "question": "test"})
         assert result == {"self_ingested": False}
 
     @patch("graph.nodes.self_ingest.get_settings")
-    @patch("graph.nodes.self_ingest.get_vectorstore")
+    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
     def test_learning_mode_skips_when_docs_found(self, mock_get_vs, mock_settings):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
         result = self_ingest(
@@ -363,7 +368,7 @@ class TestSelfIngest:
         assert result == {"self_ingested": False}
 
     @patch("graph.nodes.self_ingest.get_settings")
-    @patch("graph.nodes.self_ingest.get_vectorstore")
+    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
     def test_learning_mode_skips_short_answers(self, mock_get_vs, mock_settings):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
         result = self_ingest(
@@ -373,7 +378,7 @@ class TestSelfIngest:
         mock_get_vs.assert_not_called()
 
     @patch("graph.nodes.self_ingest.get_settings")
-    @patch("graph.nodes.self_ingest.get_vectorstore")
+    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
     def test_learning_mode_ingests_substantive_gap_filling_answers(self, mock_get_vs, mock_settings):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
         mock_vs = MagicMock()
