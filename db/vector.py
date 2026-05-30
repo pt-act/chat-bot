@@ -14,10 +14,6 @@ def get_vectorstore() -> Chroma:
     )
 
 
-def chroma() -> Chroma:
-    return get_vectorstore()
-
-
 class VectorStoreRepository:
     """
     Thin adapter around ChromaDB to isolate private _collection API usage.

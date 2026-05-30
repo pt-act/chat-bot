@@ -4,6 +4,15 @@ import redis as _redis
 
 from config import get_settings
 
+# Namespace prefix for per-user conversation memory. Keeps user-controlled ids
+# from colliding with operational keys (e.g. "ingest:doc_ids", "rate_limit:*").
+_MEMORY_PREFIX = "chat:memory:"
+
+
+def memory_key(user_id: str) -> str:
+    """Return the namespaced Redis key for a user's conversation memory."""
+    return f"{_MEMORY_PREFIX}{user_id}"
+
 
 @lru_cache
 def get_redis() -> _redis.Redis:

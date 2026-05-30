@@ -92,8 +92,10 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 @app.exception_handler(RuntimeError)
 async def runtime_error_handler(request: Request, exc: RuntimeError):
+    # Log the full detail server-side, but never echo internal error text to the
+    # client — it can leak file paths, upstream messages, or infra detail.
     logger.error("Runtime error on %s %s: %s", request.method, request.url.path, exc)
-    return JSONResponse(status_code=500, content={"error": "Internal server error", "detail": str(exc)})
+    return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 
 @app.exception_handler(Exception)
