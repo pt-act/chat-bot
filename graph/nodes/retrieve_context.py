@@ -5,6 +5,8 @@ from db.vector import get_synthesized_vectorstore, get_vectorstore
 
 logger = logging.getLogger(__name__)
 
+_SNIPPET_LEN = 200
+
 
 def _search_synthesized(question: str, k: int = 3) -> list:
     """Best-effort lookup of previously self-ingested answers (learning mode only).
@@ -20,26 +22,54 @@ def _search_synthesized(question: str, k: int = 3) -> list:
         return []
 
 
-def _source_of(doc) -> str:
-    """Resolve a human-readable source label for a retrieved chunk.
+def _snippet(text: str) -> str:
+    text = (text or "").strip()
+    if len(text) <= _SNIPPET_LEN:
+        return text
+    return text[:_SNIPPET_LEN].rsplit(" ", 1)[0] + "…"
 
-    Ingested policy chunks store the filename under ``source_file`` (see
-    ingest.policies._build_chunks), while self-ingested/synthesized chunks use
-    ``source``. Check both so the API never silently reports ``unknown`` for
-    real documents.
-    """
-    meta = doc.metadata or {}
+
+def _label_of(meta: dict) -> str:
+    # Ingested policy chunks store the filename under ``source_file``; synthesized
+    # chunks use ``source``. Check both so sources are never silently "unknown".
     return meta.get("source_file") or meta.get("source") or "unknown"
+
+
+def _to_source(doc, score: float | None = None) -> dict:
+    """Build a structured citation from a retrieved chunk (see schemas.responses.Source)."""
+    meta = doc.metadata or {}
+    return {
+        "label": _label_of(meta),
+        "doc_id": meta.get("doc_id") or meta.get("source"),
+        "score": round(float(score), 4) if score is not None else None,
+        "page": meta.get("page_number"),
+        "snippet": _snippet(doc.page_content),
+    }
+
+
+def _dedup(sources: list[dict]) -> list[dict]:
+    """De-duplicate by (doc_id, label, page), keeping first occurrence (highest score)."""
+    seen, out = set(), []
+    for s in sources:
+        key = (s.get("doc_id"), s.get("label"), s.get("page"))
+        if key not in seen:
+            seen.add(key)
+            out.append(s)
+    return out
 
 
 def retrieve_context(state):
     question = state["question"]
-    threshold = get_settings().retrieval_score_threshold
+    settings = get_settings()
+    threshold = state.get("score_threshold")
+    if threshold is None:
+        threshold = settings.retrieval_score_threshold
+    top_k = state.get("top_k") or 3
     chat_mode = state.get("chat_mode", "strict")
     vs = get_vectorstore()
 
-    top = vs.similarity_search_with_relevance_scores(question, k=1)
-    best_score = top[0][1] if top else 0.0
+    scored = vs.similarity_search_with_relevance_scores(question, k=top_k)
+    best_score = scored[0][1] if scored else 0.0
 
     # Strict mode: block below threshold (no context → refusal prompt)
     if chat_mode == "strict" and best_score < threshold:
@@ -48,19 +78,18 @@ def retrieve_context(state):
 
     # Open/learning mode with low scores: provide best available matches (may be weak)
     if chat_mode != "strict" and best_score < threshold:
-        docs = vs.similarity_search(question, k=3)
+        docs = vs.similarity_search(question, k=top_k)
         # Learning mode additionally draws on previously synthesized answers, which
         # live in a separate collection. Strict/open never see synthesized content.
         if chat_mode == "learning":
-            docs = docs + _search_synthesized(question, k=3)
+            docs = docs + _search_synthesized(question, k=top_k)
         context = "\n\n".join(d.page_content for d in docs) if docs else ""
-        sources = list({_source_of(d) for d in docs}) if docs else []
+        sources = _dedup([_to_source(d) for d in docs])
         logger.info("Open/learning mode: providing %d low-score docs (best=%.3f)", len(docs), best_score)
         return {"docs": context, "sources": sources, "best_score": best_score}
 
-    # Above threshold: MMR for diverse, relevant results
-    results = vs.max_marginal_relevance_search(question, k=3, fetch_k=10)
-    context = "\n\n".join(d.page_content for d in results)
-    sources = list({_source_of(d) for d in results})
-    logger.info("Retrieved %d chunks via MMR (best score: %.3f)", len(results), best_score)
+    # Above threshold: reuse the scored top-k (gives per-source relevance scores for citations)
+    context = "\n\n".join(d.page_content for d, _ in scored)
+    sources = _dedup([_to_source(d, s) for d, s in scored])
+    logger.info("Retrieved %d chunks (best score: %.3f)", len(scored), best_score)
     return {"docs": context, "sources": sources, "best_score": best_score}

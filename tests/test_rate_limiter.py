@@ -81,13 +81,19 @@ class TestRateLimitMiddleware:
         client = self._make_app(max_requests=5)
         resp = client.get("/test")
         assert resp.status_code == 200
+        # Rate-limit headers are exposed on every response (spec A5).
+        assert resp.headers["X-RateLimit-Limit"] == "5"
+        assert int(resp.headers["X-RateLimit-Remaining"]) == 4
+        assert "X-RateLimit-Reset" in resp.headers
 
     def test_request_exceeds_limit_returns_429(self):
         client = self._make_app(max_requests=1)
         client.get("/test")  # first request
         resp = client.get("/test")  # second request → should be blocked
         assert resp.status_code == 429
-        assert resp.json()["error"] == "Too many requests"
+        # problem+json body + Retry-After for intelligent back-off.
+        assert resp.json()["title"] == "Too many requests"
+        assert int(resp.headers["Retry-After"]) >= 1
 
     def test_different_ips_have_separate_limits(self):
         client = self._make_app(max_requests=1)

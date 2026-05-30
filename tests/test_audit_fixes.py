@@ -8,9 +8,14 @@ from unittest.mock import MagicMock, patch
 
 import responses as resp
 
-from graph.nodes.retrieve_context import _source_of
+from graph.nodes.retrieve_context import _to_source
 from ingest.policies import process_policy
 from utils.llm_adapter import get_llm
+
+
+def _source_label(doc):
+    """Label resolution used to be `_source_of`; now derived from the structured source."""
+    return _to_source(doc)["label"]
 
 
 # ── Finding: get_llm() ignored generation params / raised TypeError ──────────────
@@ -48,17 +53,17 @@ class TestSourceResolution:
     def test_prefers_source_file_key(self):
         doc = MagicMock()
         doc.metadata = {"source_file": "return_policy.pdf"}
-        assert _source_of(doc) == "return_policy.pdf"
+        assert _source_label(doc) == "return_policy.pdf"
 
     def test_falls_back_to_source_key_for_synthesized_docs(self):
         doc = MagicMock()
         doc.metadata = {"source": "synthesized:abc123"}
-        assert _source_of(doc) == "synthesized:abc123"
+        assert _source_label(doc) == "synthesized:abc123"
 
     def test_unknown_when_no_source_metadata(self):
         doc = MagicMock()
         doc.metadata = {}
-        assert _source_of(doc) == "unknown"
+        assert _source_label(doc) == "unknown"
 
 
 # ── Finding: doc_id derivation used str.rstrip(".pdf") (strips a char set) ───────

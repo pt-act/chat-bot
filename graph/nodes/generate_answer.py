@@ -19,12 +19,21 @@ def _response_language(question: str) -> str:
     return "Arabic" if re.search(r"[؀-ۿ]", question) else "English"
 
 
+# Per-request language overrides ("auto" falls back to detection).
+_LANG_LABELS = {"en": "English", "ar": "Arabic"}
+
+
+def _resolve_language(state, question: str) -> str:
+    requested = (state.get("lang") or "auto").lower()
+    return _LANG_LABELS.get(requested, _response_language(question))
+
+
 def generate_answer(state):
     summary = state.get("summary", "")
     messages = state.get("messages") or []
     docs = state.get("docs", "")
     question = state["question"]
-    lang = _response_language(question)
+    lang = _resolve_language(state, question)
     chat_mode = state.get("chat_mode", "strict")
 
     recent = messages[-6:]
@@ -49,4 +58,5 @@ def generate_answer(state):
             AIMessage(content=response.content),
         ],
         "last_answer": response.content,
+        "lang": lang,  # resolved label, surfaced in response meta
     }

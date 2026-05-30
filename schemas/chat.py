@@ -1,8 +1,21 @@
-from pydantic import BaseModel, field_validator
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class ChatRequest(BaseModel):
     q: str
+    # Per-request overrides (all optional; omitted → server defaults / auto).
+    mode: Literal["strict", "open", "learning"] | None = Field(
+        default=None, description="Override the server's default chat mode for this request."
+    )
+    lang: Literal["auto", "en", "ar"] = Field(
+        default="auto", description="Force the response language, or auto-detect."
+    )
+    top_k: int | None = Field(default=None, ge=1, le=10, description="Number of chunks to retrieve.")
+    score_threshold: float | None = Field(
+        default=None, ge=0, le=1, description="Minimum relevance score for a chunk to be used."
+    )
 
     @field_validator("q")
     @classmethod

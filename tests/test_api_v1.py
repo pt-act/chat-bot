@@ -70,6 +70,41 @@ class TestProblemJson:
         assert any(e["field"] == "q" for e in body["errors"])
 
 
+class TestPerRequestControls:
+    @patch("controllers.v1.chat.conversation")
+    def test_controls_passed_through(self, mock_conv):
+        mock_conv.return_value = {"answer": "a", "sources": [], "self_ingested": False, "lang": "en"}
+        resp = _client().post(
+            "/api/v1/chat",
+            json={"q": "hi", "mode": "open", "lang": "ar", "top_k": 5, "score_threshold": 0.4},
+        )
+        assert resp.status_code == 200
+        mock_conv.assert_called_once_with(
+            user_id="anonymous", q="hi", mode="open", lang="ar", top_k=5, score_threshold=0.4
+        )
+        assert resp.json()["meta"]["mode"] == "open"
+
+    def test_invalid_mode_rejected(self):
+        resp = _client().post("/api/v1/chat", json={"q": "hi", "mode": "bogus"})
+        assert resp.status_code == 422
+
+    def test_top_k_out_of_range_rejected(self):
+        resp = _client().post("/api/v1/chat", json={"q": "hi", "top_k": 99})
+        assert resp.status_code == 422
+
+    @patch("controllers.v1.chat.conversation")
+    def test_structured_citations_serialized(self, mock_conv):
+        mock_conv.return_value = {
+            "answer": "a",
+            "sources": [{"label": "policy.pdf", "doc_id": "policy", "score": 0.82, "page": 3, "snippet": "..."}],
+            "self_ingested": False,
+            "lang": "en",
+        }
+        resp = _client().post("/api/v1/chat", json={"q": "hi"})
+        src = resp.json()["sources"][0]
+        assert src["doc_id"] == "policy" and src["score"] == 0.82 and src["page"] == 3
+
+
 class TestOpenAPI:
     def test_v1_routes_documented(self):
         spec = _client().get("/openapi.json").json()
