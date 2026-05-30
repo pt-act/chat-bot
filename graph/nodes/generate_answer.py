@@ -16,11 +16,6 @@ def _get_chat():
 
 
 def _response_language(question: str) -> str:
-    """
-    Detect language with Python — never leaves it to LLM guessing.
-    Arabic Unicode block: U+0600–U+06FF
-    Rule: any Arabic characters present (even mixed) → Arabic, else English.
-    """
     return "Arabic" if re.search(r"[؀-ۿ]", question) else "English"
 
 
@@ -30,6 +25,7 @@ def generate_answer(state):
     docs = state.get("docs", "")
     question = state["question"]
     lang = _response_language(question)
+    chat_mode = state.get("chat_mode", "strict")
 
     recent = messages[-6:]
     history = "\n".join(f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in recent)
@@ -40,15 +36,17 @@ def generate_answer(state):
         docs=docs,
         question=question,
         lang=lang,
+        chat_mode=chat_mode,
     )
 
     response = _get_chat().invoke(prompt)
-    logger.info("Generated answer for user %s (lang=%s)", state.get("user_id"), lang)
+    logger.info("Generated answer for user %s (lang=%s, mode=%s)", state.get("user_id"), lang, chat_mode)
 
     return {
         "messages": messages
         + [
             HumanMessage(content=question),
             AIMessage(content=response.content),
-        ]
+        ],
+        "last_answer": response.content,
     }

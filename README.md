@@ -8,7 +8,8 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-Backend-green)
 ![LangChain](https://img.shields.io/badge/LangChain-LLM%20Orchestration-orange)
 ![ChromaDB](https://img.shields.io/badge/VectorDB-Chroma-purple)
-![LLM](https://img.shields.io/badge/LLM-OpenAI%20%7C%20Anthropic%20%7C%20Groq-black)
+![LLM](https://img.shields.io/badge/LLM-14%20Providers-black)
+![Chat Mode](https://img.shields.io/badge/Mode-Strict%20%7C%20Open%20%7C%20Learning-blue)
 
 </div>
 
@@ -48,7 +49,10 @@ It supports:
 
 * Conversational memory
 * Document-based Q&A (RAG)
-* Strict knowledge-base-only responses — the bot refuses to answer outside ingested documents
+* Three chat modes: strict (knowledge-base-only), open (free interaction), learning (auto-growing KB)
+* 14 LLM providers (OpenAI, Anthropic, Google, Groq, Ollama, DeepSeek, Together, Mistral, Fireworks, OpenRouter, vLLM, LM Studio, llama.cpp)
+* 7+ embedding models via FastEmbed (ONNX-based, zero CVEs)
+* Fully local deployment with Ollama (zero cloud API keys)
 * Multilingual responses (Arabic / English)
 * Scalable backend design
 
@@ -78,13 +82,14 @@ Making it suitable for real-world SaaS integrations.
                          │
                          ▼
           ┌──────────────────────────────┐
-          │     LangGraph Orchestrator   │
-          │                              │
-          │  1. load_memory   (Redis)    │
-          │  2. retrieve_context (Chroma)│
-          │  3. generate_answer  (LLM)   │
-          │  4. summarize                │
-          │  5. store_memory  (Redis)    │
+│     LangGraph Orchestrator   │
+           │                              │
+           │  1. load_memory   (Redis)    │
+           │  2. retrieve_context (Chroma)│ ← mode-aware score gate
+           │  3. generate_answer  (LLM)   │ ← mode-specific prompt
+           │  4. self_ingest  (Chroma)    │ ← learning mode only
+           │  5. summarize                │
+           │  6. store_memory  (Redis)    │
           └──────────────────────────────┘
                          │
                          ▼
@@ -97,11 +102,12 @@ Making it suitable for real-world SaaS integrations.
 
 1. User sends a question
 2. System loads conversation history from Redis
-3. Relevant documents are retrieved from ChromaDB (RAG)
+3. Relevant documents are retrieved from ChromaDB (RAG) — behavior depends on `CHAT_MODE`
 4. LangGraph orchestrates the flow:
-   - memory → retrieval → reasoning → response
-5. LLM generates a final contextual answer
-6. Conversation is updated + summarized for future use
+   - memory → retrieval → reasoning → self-ingest (if learning) → response
+5. LLM generates a final contextual answer — mode-specific prompt controls behavior
+6. In learning mode, synthesized answers are auto-ingested into ChromaDB as new knowledge
+7. Conversation is updated + summarized for future use
 
 ## 🗂️ Project Structure
 
@@ -111,22 +117,32 @@ chat-bot/
 ├── middlewares/          # Rate limiting middleware
 ├── db/                   # Redis and ChromaDB clients
 ├── graph/
-│   ├── builder.py        # LangGraph pipeline definition
-│   └── nodes/            # Individual graph nodes (load_memory, retrieve_context, generate_answer, summarize, store_memory)
+│   ├── builder.py        # LangGraph pipeline definition (6 nodes + edges)
+│   ├── state.py          # State TypedDict (chat_mode, best_score, last_answer, self_ingested)
+│   └── nodes/            # Individual graph nodes
+│       ├── load_memory.py       # Load conversation history from Redis
+│       ├── retrieve_context.py  # Mode-aware score gate + MMR retrieval
+│       ├── generate_answer.py   # Mode-specific prompt → LLM call
+│       ├── self_ingest.py       # Auto-ingest synthesized answers (learning mode)
+│       ├── store_memory.py      # Save conversation to Redis
+│       └── summarize.py        # Conversation summarization
 ├── ingest/               # Incremental document ingestion pipeline
 ├── prompts/
-│   ├── answer.py         # Answer generation prompt
+│   ├── answer.py         # 3 mode-specific prompt builders (strict, open, learning)
 │   └── summarize.py      # Conversation summarization prompt
 ├── schemas/
 │   ├── chat.py           # ChatRequest schema
 │   └── ingest.py         # IngestRequest schema
-├── tests/                # Pytest test suite (ingest pipeline)
+├── services/
+│   └── chat_service.py   # Injects chat_mode from settings, returns self_ingested flag
+├── tests/                # Pytest test suite (91 tests across 5 test files)
 ├── main.py               # App entrypoint
-├── config.py             # Settings (pydantic-settings)
+├── config.py             # Settings (pydantic-settings) — CHAT_MODE, SELF_INGEST_MIN_LENGTH
 ├── pytest.ini            # Test configuration
 ├── requirements.txt
 ├── requirements-dev.txt  # Test dependencies (pytest, fakeredis, responses, fpdf2)
-└── docker-compose.yml
+├── docker-compose.yml           # Cloud deployment (API + Redis)
+└── docker-compose.local.yml     # Local deployment (API + Redis + Ollama)
 ```
 
 ## ⚙️ Setup Instructions
@@ -178,6 +194,9 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 
 RETRIEVAL_SCORE_THRESHOLD=0.3           # raise to 0.7 for stricter grounding
+
+CHAT_MODE=strict                        # strict | open | learning — see Chat Modes section
+SELF_INGEST_MIN_LENGTH=50               # minimum answer length for auto-ingest in learning mode
 ```
 
 See [.env.example](.env.example) for the full list of options.
@@ -205,6 +224,28 @@ The system uses a **universal OpenAI-compatible adapter** — most modern provid
 
 All OpenAI-compatible providers use the same `langchain_openai.ChatOpenAI` client. Just set `LLM_BASE_URL` to point to your endpoint. Local providers (Ollama, LM Studio, vLLM) don't need an API key.
 
+**Provider aliases:** `claude` → anthropic, `gpt` / `chatgpt` → openai, `llama` → ollama, `gemini` → google.
+
+##### LLM Provider Comparison
+
+| Provider | Type | Latency | Cost (per 1M tokens) | Best For | API Key |
+|----------|------|---------|----------------------|----------|---------|
+| **OpenAI** | Cloud API | ~1s | Input $0.15 / Output $0.60 (gpt-4o-mini) | General production use | `OPENAI_API_KEY` |
+| **Anthropic** | Cloud API | ~1.5s | Input $0.25 / Output $1.25 (claude-3.5-haiku) | Long-context reasoning, safety | `ANTHROPIC_API_KEY` |
+| **Google Gemini** | Cloud API | ~1s | Free tier: 15 RPM; Paid ~$0.075/1M (gemini-2.0-flash) | Cost-effective, multimodal | `GOOGLE_API_KEY` |
+| **Groq** | Cloud API | ~0.3s | Free tier available; Paid ~$0.05/1M | Fastest inference, real-time chat | `GROQ_API_KEY` + `LLM_BASE_URL` |
+| **DeepSeek** | Cloud API | ~2s | Input $0.14 / Output $0.28 (deepseek-chat) | Budget-friendly, strong coding | `OPENAI_API_KEY` + `LLM_BASE_URL` |
+| **Together** | Cloud API | ~1s | Varies by model (~$0.10–$0.80/1M) | Open-source model access | `OPENAI_API_KEY` + `LLM_BASE_URL` |
+| **Mistral** | Cloud API | ~1s | Input $0.10 / Output $0.30 (mistral-small) | European data compliance | `OPENAI_API_KEY` + `LLM_BASE_URL` |
+| **Fireworks** | Cloud API | ~0.5s | ~$0.20/1M (open-source models) | Fast open-source inference | `OPENAI_API_KEY` + `LLM_BASE_URL` |
+| **OpenRouter** | Cloud proxy | Varies | Varies by model + 5% surcharge | Single API for 100+ models | `OPENAI_API_KEY` + `LLM_BASE_URL` |
+| **Ollama** | Local | ~2–10s | **Free** (own hardware) | Full privacy, air-gapped, zero cost | None (local) |
+| **vLLM** | Local | ~1–5s | **Free** (own hardware) | High-throughput self-hosted | None (local) |
+| **LM Studio** | Local | ~2–10s | **Free** (own hardware) | Desktop dev/testing | None (local) |
+| **llama.cpp** | Local | ~3–15s | **Free** (own hardware) | Minimal hardware, CPU-only | None (local) |
+
+> **When to use local vs cloud:** Use local providers (Ollama/vLLM) when data privacy is paramount, for air-gapped deployments, or to avoid API costs. Use cloud providers for production reliability, lower latency, and models that exceed local hardware capacity. Groq is the fastest cloud option; DeepSeek and Gemini Flash are the cheapest.
+
 #### 📦 Embedding Providers
 
 The default embedding provider is OpenAI (no extra dependencies).
@@ -220,7 +261,7 @@ The default embedding provider is OpenAI (no extra dependencies).
 FastEmbed uses ONNX Runtime (no torch dependency):
 - ~50MB download vs ~2GB for torch-based alternatives
 - Zero CVEs — pure Python + ONNX
-- Supports popular models: `BAAI/bge-small-en-v1.5`, `sentence-transformers/all-MiniLM-L6-v2`, etc.
+- Supports any FastEmbed-compatible model — unknown models trigger a warning but still load
 
 **Alternative — HuggingFace (torch-based):**
 
@@ -229,6 +270,25 @@ pip install langchain-huggingface sentence-transformers transformers numpy
 ```
 
 > ⚠️ `sentence-transformers` and `transformers` pull in `torch` which has known CVEs on older versions. Only install these if you explicitly need HuggingFace-specific models not available in FastEmbed.
+
+##### Embedding Model Comparison
+
+| Model | Provider | Dimensions | Download | Context | Best For |
+|-------|----------|-----------|----------|---------|----------|
+| `text-embedding-3-small` | OpenAI | 1536 | API-only | 8191 | Default, production reliability |
+| `text-embedding-3-large` | OpenAI | 3072 | API-only | 8191 | Maximum accuracy, higher cost |
+| `BAAI/bge-small-en-v1.5` | FastEmbed | 384 | ~50MB | 512 | Prototyping, small datasets, low memory |
+| `BAAI/bge-base-en-v1.5` | FastEmbed | 768 | ~120MB | 512 | Balanced speed/quality (**recommended**) |
+| `BAAI/bge-large-en-v1.5` | FastEmbed | 1024 | ~430MB | 512 | Highest local quality, slower inference |
+| `sentence-transformers/all-MiniLM-L6-v2` | FastEmbed | 384 | ~30MB | 256 | Fast semantic search, versatile |
+| `sentence-transformers/all-MiniLM-L12-v2` | FastEmbed | 384 | ~60MB | 256 | Slightly better quality than L6 |
+| `BAAI/bge-m3` | FastEmbed | 1024 | ~570MB | 8192 | **Arabic/English mixed content**, multilingual |
+| `nomic-ai/nomic-embed-text-v1.5` | FastEmbed | 768 | ~130MB | 8192 | Long documents (>256 tokens) |
+| `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace | 384 | ~2GB+ | 256 | Same model, torch-based (AVOID if FastEmbed works) |
+
+> **Choosing an embedding model:** If you need Arabic+English support, use `BAAI/bge-m3`. For most English-only use cases, `BAAI/bge-base-en-v1.5` offers the best balance. For zero-cost local deployment, any FastEmbed model works without API keys. OpenAI embeddings are best when you don't want to manage local inference.
+
+> **Switching models requires re-ingesting:** Embedding models produce different vectors — you must delete existing documents and re-ingest after changing `EMBEDDING_MODEL`.
 
 #### 🔒 Security Configuration
 
@@ -270,6 +330,29 @@ Or run with Docker (includes Redis):
 docker-compose up --build
 ```
 
+#### Fully Local Deployment (Ollama + FastEmbed — zero cloud API keys)
+
+For air-gapped, privacy-first, or zero-cost deployment, use the local compose file with Ollama:
+
+```bash
+# One command — Ollama pulls llama3.2 and nomic-embed-text on first start
+docker-compose -f docker-compose.local.yml up --build
+```
+
+This starts:
+- **Ollama** on port 11434 — pulls `llama3.2` for chat and `nomic-embed-text` for embeddings (if you prefer FastEmbed)
+- **Redis** on port 6379 — conversation memory with AOF persistence
+- **API** on port 8000 — configured for fully local operation
+
+All settings are pre-configured in `docker-compose.local.yml`:
+- `LLM_PROVIDER=ollama`, `LLM_BASE_URL=http://ollama:11434/v1`
+- `EMBEDDING_PROVIDER=fastembed`, `EMBEDDING_MODEL=BAAI/bge-small-en-v1.5`
+- No cloud API keys needed
+
+> **Hardware requirements:** Ollama with llama3.2 needs ~4GB RAM. For larger models (llama3.1-70b), you need ~40GB RAM or a GPU. See [Ollama model list](https://ollama.com/models) for options.
+
+> **Customizing the model:** Edit `LLM_MODEL` and the `ollama pull` command in `docker-compose.local.yml` to use any Ollama-supported model. For multilingual support, use `bge-m3` as the embedding model and a multilingual LLM like `mistral` or `qwen2`.
+
 ## 📥 6. Document Ingestion (S3 → ChromaDB)
 
 ### Ingest a document
@@ -302,6 +385,24 @@ curl -X DELETE http://127.0.0.1:8000/api/ingest/terms_conditions
 ```
 
 ## 💬 7. Chat API
+
+### Chat Modes
+
+The system supports three interaction modes via `CHAT_MODE` in `.env`:
+
+| Mode | Behavior | When no docs match | Self-ingest | Use case |
+|------|----------|--------------------|-------------|----------|
+| **strict** (default) | Knowledge-base-only | Refuses: "I don't have information..." | No | Legal, medical, regulated domains |
+| **open** | Free interaction | Uses general knowledge, honest about provenance | No | General assistants, brainstorming |
+| **learning** | Free interaction + growing KB | Synthesizes answer, auto-saves to ChromaDB | Yes (≥50 chars, no docs found) | Knowledge-building, research assistants |
+
+> **Learning mode quality gate:** Only auto-ingests responses when (1) no documents matched the question (filling a knowledge gap) and (2) the answer is ≥50 characters. All synthesized entries are tagged with `source_type=synthesized` so you can distinguish model-generated content from ingested documents.
+
+```env
+# In .env
+CHAT_MODE=strict    # or open, or learning
+SELF_INGEST_MIN_LENGTH=50
+```
 
 ### Endpoint
 
@@ -446,7 +547,7 @@ POST /api/ingest  { file_name, s3_url }
 
 #### Retrieval — Score Gate + MMR (Hallucination Prevention)
 
-Retrieval runs in two steps to prevent the LLM from hallucinating against weak or unrelated matches:
+Retrieval runs in two steps, with behavior depending on `CHAT_MODE`:
 
 <div align="center">
 
@@ -455,13 +556,16 @@ User question
       │
       ▼
 Step 1 — Relevance gate
-similarity_search k=1  →  score < 0.3 ?
+similarity_search k=1  →  score < threshold?
       │                         │
-      │                         └──► docs = ""  →  "I don't have information
-      │                                             about that in our knowledge
-      │                                             base. Please contact support."
-      │ score ≥ 0.3
-      │ (question is on-topic)
+      │    ┌─── CHAT_MODE ──────┤
+      │    │                     │
+      │    │ strict:             │ open/learning:
+      │    │ docs = ""           │ docs = best available
+      │    │ → refusal prompt    │ → "use general knowledge"
+      │    │                     │ prompt
+      │    │                     │
+      │ score ≥ threshold (question is on-topic)
       ▼
 Step 2 — MMR retrieval
 max_marginal_relevance_search k=3, fetch_k=10
@@ -472,9 +576,13 @@ max_marginal_relevance_search k=3, fetch_k=10
 
 </div>
 
-**Step 1 — Score gate:** fetches the single closest chunk and checks its cosine similarity score. If even the best match is below `0.3` the question is off-topic and the LLM is never called with guesswork context.
+**Step 1 — Score gate:** fetches the single closest chunk and checks its cosine similarity score. Behavior depends on `CHAT_MODE`:
+- **Strict mode:** If even the best match is below threshold, the question is off-topic and no context is sent to the LLM (refusal prompt).
+- **Open/learning mode:** Below-threshold matches are still provided to the LLM as weak grounding signals. The prompt instructs the LLM to use general knowledge when context is weak, and to be honest about provenance.
 
-**Step 2 — MMR:** only runs when step 1 passes. Fetches 10 candidates and picks the 3 that are both relevant AND diverse — avoiding 3 near-identical paragraphs being sent to the LLM.
+**Step 2 — MMR:** only runs when step 1 passes the threshold. Fetches 10 candidates and picks the 3 that are both relevant AND diverse — avoiding 3 near-identical paragraphs being sent to the LLM.
+
+**Step 3 — Self-ingest (learning mode only):** If the retrieval score was below threshold (knowledge gap) and the LLM's answer is ≥50 characters, the answer is auto-ingested into ChromaDB with `source_type=synthesized` metadata. This creates a growing knowledge base that fills gaps over time.
 
 **ChromaDB is configured with cosine distance** (`hnsw:space: cosine`) — the correct metric for text embeddings. Without this, scores are L2-based and can go negative, making the threshold meaningless.
 
@@ -482,7 +590,10 @@ max_marginal_relevance_search k=3, fetch_k=10
 
 ### 🔹 LLM Layer
 
-Configurable via environment variables:
+Configurable via environment variables and chat mode:
+- `CHAT_MODE=strict` — Knowledge-base-only. Refuses outside topics.
+- `CHAT_MODE=open` — Free interaction. Uses general knowledge when no documents match.
+- `CHAT_MODE=learning` — Free interaction + auto-ingests synthesized answers into ChromaDB.
 - Uses conversation summary (long-term memory)
 - Uses recent messages (short-term memory)
 - Uses retrieved context (RAG)
@@ -491,37 +602,48 @@ Configurable via environment variables:
 ## 🧠 Key Features
 
 * ✅ Conversational memory (short + long-term via Redis)
-* ✅ RAG retrieval with cosine score gate (threshold 0.3) + MMR diversity ranking
-* ✅ Hallucination prevention — off-topic questions blocked before LLM is called
+* ✅ RAG retrieval with mode-aware score gate + MMR diversity ranking
+* ✅ Three chat modes: strict (knowledge-base-only), open (general knowledge), learning (growing KB)
+* ✅ Self-ingest in learning mode — auto-saves synthesized answers to ChromaDB
+* ✅ 14 LLM providers with universal OpenAI-compatible adapter + provider aliases
+* ✅ 7+ embedding models via FastEmbed (ONNX, ~50MB, zero CVEs) + model registry
 * ✅ Citations — every answer includes which source documents were used
 * ✅ Conversational follow-ups — context-aware replies when no document match exists
 * ✅ Incremental ingestion — only re-embeds changed chunks, not the whole document
-* ✅ Ingestion safeguards — duplicate submission protection, file size limits, failed status saved to Redis, status polling endpoint
+* ✅ Ingestion safeguards — duplicate submission protection, file size limits, status polling endpoint
 * ✅ Global duplicate detection — same PDF under different names caught via content hash
 * ✅ Rate limiting — 60 requests/minute per IP (Redis-backed, returns 429 on breach)
-* ✅ Multi-LLM provider support (OpenAI, Anthropic, Groq)
+* ✅ SSRF protection — blocks private IPs and cloud metadata endpoints
 * ✅ Multilingual responses (Arabic / English auto-detected)
 * ✅ LangGraph workflow orchestration
-* ✅ Strict knowledge-base-only responses — refuses to answer outside ingested documents
 * ✅ FastAPI production API layer
-* ✅ Dockerized with Docker Compose (Redis with AOF persistence via named volume)
+* ✅ Dockerized — cloud deployment (docker-compose.yml) + local deployment (docker-compose.local.yml with Ollama)
 * ✅ Structured logging to console + rotating file (logs/app.log, 10 MB cap)
+* ✅ 91 tests covering adapters, graph nodes, builder, rate limiter, security
 
 ## 🧩 TODO (Roadmap)
 
+* [x] Multi-provider LLM support (14 providers)
+* [x] FastEmbed local embeddings (7+ models, ONNX-based)
+* [x] Chat modes (strict, open, learning with self-ingest)
+* [x] Local deployment (Ollama + FastEmbed, zero API keys)
+* [x] Provider comparison documentation
 * [ ] Guardrails
 * [ ] Evaluation (RAGAS)
+* [ ] CI/CD pipeline hardening
+* [ ] Learning mode review workflow (two-phase ingest for synthesized entries)
 
 ## ⚡ Tech Stack
 
 * **Backend:** FastAPI
-* **LLM:** OpenAI / Anthropic / Groq
+* **LLM:** 14 providers — OpenAI, Anthropic, Google, Groq, Ollama, DeepSeek, Together, Mistral, Fireworks, OpenRouter, vLLM, LM Studio, llama.cpp
+* **Embeddings:** OpenAI / FastEmbed (7+ models) / HuggingFace
 * **Orchestration:** LangGraph
 * **Framework:** LangChain
 * **Vector DB:** ChromaDB
 * **Cache / Memory:** Redis
-* **Runtime:** Python 3.10
-* **Container:** Docker + Docker Compose
+* **Runtime:** Python 3.10+
+* **Container:** Docker + Docker Compose (cloud + local)
 
 ## 🤝 Contributing
 
@@ -573,16 +695,18 @@ Contributions are welcome! Here's how to get started:
 7. **Open a Pull Request** with a clear description of what you changed and why
 
 **Good first contributions:**
-- Add support for a new LLM provider in `utils/llm_adapter.py`
 - Add a new document loader (e.g. DOCX, TXT) in `ingest/`
 - Improve test coverage in `tests/`
+- Add a two-phase review workflow for learning mode synthesized entries
 - Add Guardrails or RAGAS evaluation (see TODO)
+- Add a new FastEmbed model to the registry in `utils/embedding_adapter.py`
 
 **Project layout to get oriented:**
 - `graph/nodes/` — each file is one step in the LangGraph pipeline
+- `graph/nodes/self_ingest.py` — learning mode auto-ingest logic
+- `graph/nodes/retrieve_context.py` — mode-aware score gate + MMR retrieval
+- `prompts/answer.py` — 3 mode-specific prompt builders (strict, open, learning)
 - `ingest/policies.py` — full ingestion pipeline (download → chunk → diff → embed)
-- `graph/nodes/retrieve_context.py` — score gate + MMR retrieval logic
-- `prompts/answer.py` — the LLM prompt (easiest place to start experimenting)
 
 > Please open an issue before starting large changes so we can discuss approach first.
 

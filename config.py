@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # "I don't have information about that" instead of hallucinating from weak matches.
     retrieval_score_threshold: float = 0.3
 
+    chat_mode: str = "strict"  # strict | open | learning
+    self_ingest_min_length: int = 50
+
     # Ingest
     max_file_size_mb: int = 50
     download_timeout_seconds: int = 30
@@ -59,7 +62,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def check_api_keys(self):
-        """Fail fast if the chosen provider's API key is missing."""
         provider = self.llm_provider.lower()
         if provider == "openai" and not self.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
@@ -69,16 +71,31 @@ class Settings(BaseSettings):
             raise ValueError("GOOGLE_API_KEY is required when LLM_PROVIDER=google")
         if provider == "groq" and not self.groq_api_key:
             raise ValueError("GROQ_API_KEY is required when LLM_PROVIDER=groq")
-        # OpenAI-compatible providers with base_url don't need API key (local Ollama, etc.)
+        return self
+
+    @model_validator(mode="after")
+    def check_chat_mode(self):
+        mode = self.chat_mode.lower()
+        if mode not in {"strict", "open", "learning"}:
+            raise ValueError(f"CHAT_MODE must be 'strict', 'open', or 'learning' — got '{mode}'")
         return self
 
     @model_validator(mode="after")
     def check_embedding_keys(self):
-        """Fail fast if embedding provider's API key is missing."""
         provider = self.embedding_provider.lower()
         if provider == "openai" and not self.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai")
-        # fastembed and huggingface don't need API keys — local inference only
+        if provider == "fastembed":
+            from utils.embedding_adapter import FASTEMBED_MODELS
+
+            if self.embedding_model not in FASTEMBED_MODELS:
+                known = ", ".join(sorted(FASTEMBED_MODELS.keys()))
+                logger.warning(
+                    "EMBEDDING_MODEL='%s' is not in the built-in registry. "
+                    "It may still work if FastEmbed supports it. Known models: %s",
+                    self.embedding_model,
+                    known,
+                )
         return self
 
     @model_validator(mode="after")

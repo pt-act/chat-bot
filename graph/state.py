@@ -9,3 +9,7 @@ class State(TypedDict):
     docs: str
     summary: str
     sources: list[str]
+    chat_mode: str
+    best_score: float
+    last_answer: str
+    self_ingested: bool

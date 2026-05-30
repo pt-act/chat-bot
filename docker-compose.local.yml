@@ -1,0 +1,67 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=ollama
+      - LLM_MODEL=llama3.2
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - EMBEDDING_PROVIDER=fastembed
+      - EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+      - REDIS_HOST=redis
+      - OPENAI_API_KEY=no-key-needed
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./logs:/app/logs
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        /bin/ollama serve &
+        sleep 5
+        ollama pull llama3.2
+        ollama pull nomic-embed-text
+        wait
+    networks:
+      - app-network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  ollama_data:
+
+networks:
+  app-network:
+    driver: bridge
