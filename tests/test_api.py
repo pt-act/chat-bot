@@ -145,9 +145,11 @@ class TestIngestEndpoint:
 
 
 class TestReadinessEndpoint:
+    @patch("main.get_redis")
     @patch("main.get_vectorstore")
-    def test_ready_all_deps_ok(self, mock_vs):
+    def test_ready_all_deps_ok(self, mock_vs, mock_redis):
         mock_vs.return_value.similarity_search.return_value = []
+        mock_redis.return_value.ping.return_value = True
         with _make_app() as client:
             resp = client.get("/ready")
             assert resp.status_code == 200
