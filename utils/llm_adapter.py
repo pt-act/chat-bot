@@ -30,7 +30,7 @@ OPENAI_COMPATIBLE = {
 
 
 @lru_cache
-def get_llm():
+def get_llm(temperature: float = 0, max_tokens: int = 1000):
     setting = get_settings()
     provider = PROVIDER_ALIASES.get(setting.llm_provider.lower(), setting.llm_provider.lower())
     model = setting.llm_model
@@ -42,8 +42,8 @@ def get_llm():
 
         kwargs = {
             "model": model,
-            "temperature": 0,
-            "max_tokens": 1000,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
 
         # If base_url is set, use it (Ollama, OpenRouter, Together, etc.)
@@ -63,20 +63,23 @@ def get_llm():
 
         return ChatAnthropic(
             model=model,
-            temperature=0,
-            max_tokens=1000,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     # Google Gemini — native client
     elif provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
+        # Validate config before importing the optional provider package so a
+        # missing key raises a clear ValueError instead of an ImportError.
         if not setting.google_api_key:
             raise ValueError("GOOGLE_API_KEY is required when LLM_PROVIDER=google")
+
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
         return ChatGoogleGenerativeAI(
             model=model,
-            temperature=0,
-            max_tokens=1000,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     else:

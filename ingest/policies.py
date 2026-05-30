@@ -52,6 +52,10 @@ def _download_file(s3_url: str, file_name: str) -> str:
             timeout=setting.download_timeout_seconds,
             stream=True,
             headers={"User-Agent": "Mozilla/5.0"},
+            # SSRF hardening: do not follow redirects — an allowed host could
+            # otherwise 30x-redirect to a private/metadata address, bypassing
+            # the validate_download_url() check that ran on the original URL.
+            allow_redirects=False,
         )
         response.raise_for_status()
     except requests.RequestException as e:
@@ -187,7 +191,9 @@ def _persist_ingest_status(
 
 
 def process_policy(file_name: str, s3_url: str) -> dict:
-    doc_id = file_name.rstrip(".pdf") if file_name.endswith(".pdf") else file_name
+    # NOTE: use removesuffix, NOT rstrip — str.rstrip(".pdf") strips any trailing
+    # combination of the characters {'.', 'p', 'd', 'f'}, so "app.pdf" -> "a".
+    doc_id = file_name.removesuffix(".pdf")
     redis_client = get_redis()
     file_path = None
 

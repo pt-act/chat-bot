@@ -60,20 +60,25 @@ class TestRateLimitMiddleware:
         def test_endpoint():
             return {"status": "ok"}
 
-        with patch(
+        # Start the patch and keep it active for the lifetime of the test.
+        # (Previously this used `with patch(...): return TestClient(app)`, which
+        # exited the patch *before* any request ran — so the middleware talked to
+        # a real Redis, failed open, and the assertions silently passed/failed
+        # depending on the environment. teardown_method stops it.)
+        self._patcher = patch(
             "middlewares.rate_limiter.get_redis",
             return_value=fakeredis.FakeRedis(decode_responses=True),
-        ):
-            return TestClient(app)
+        )
+        self._patcher.start()
+        return TestClient(app)
+
+    def teardown_method(self):
+        patcher = getattr(self, "_patcher", None)
+        if patcher is not None:
+            patcher.stop()
 
     def test_request_within_limit_succeeds(self):
         client = self._make_app(max_requests=5)
-        # Clear any residual rate limit keys from other tests
-        from db.redis_client import get_redis
-
-        redis = get_redis()
-        for key in redis.scan_iter(match="rate_limit:*"):
-            redis.delete(key)
         resp = client.get("/test")
         assert resp.status_code == 200
 
