@@ -166,7 +166,7 @@ conda activate chat-bot
 ### 📦 3. Clone and Install Dependencies
 
 ```bash
-git clone https://github.com/hasandeveloper/chat-bot.git
+git clone https://github.com/pt-act/chat-bot.git
 cd chat-bot
 pip install -r requirements.txt
 ```
