@@ -2,15 +2,18 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import get_settings
-from controllers.chat_controller import router as chat_router
-from controllers.ingest_controller import router as ingest_router
+from controllers.chat_controller import router as legacy_chat_router
+from controllers.ingest_controller import router as legacy_ingest_router
+from controllers.v1.chat import router as v1_chat_router
+from controllers.v1.ingest import router as v1_ingest_router
 from db.redis_client import get_redis
 from db.vector import get_vectorstore
+from middlewares.errors import register_error_handlers
 from middlewares.logging_setup import setup_logging
 from middlewares.observability import (
     CorrelationIdFilter,
@@ -18,6 +21,7 @@ from middlewares.observability import (
     RequestTimingMiddleware,
 )
 from middlewares.rate_limiter import RateLimitMiddleware
+from schemas.responses import DependencyHealth
 
 settings = get_settings()
 setup_logging(settings.log_level, settings.log_format)
@@ -29,6 +33,11 @@ logger = logging.getLogger(__name__)
 
 _redis_ok = False
 _chroma_ok = False
+
+# Legacy unversioned prefix kept for one deprecation cycle; new clients use /api/v1.
+_LEGACY_PREFIX = "/api"
+_V1_PREFIX = "/api/v1"
+_SUNSET = "Sat, 01 Nov 2025 00:00:00 GMT"
 
 
 @asynccontextmanager
@@ -56,11 +65,41 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
 
 
-app = FastAPI(title="Chatbot API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Chatbot API",
+    version="1.1.0",
+    description=(
+        "RAG chatbot API. Versioned endpoints live under `/api/v1` and return typed "
+        "envelopes; errors use RFC 9457 (application/problem+json). The unversioned "
+        "`/api` paths are deprecated and kept for one cycle."
+    ),
+    license_info={"name": "MIT"},
+    openapi_tags=[
+        {"name": "chat", "description": "Conversational RAG endpoints."},
+        {"name": "ingest", "description": "Document ingestion and management."},
+        {"name": "system", "description": "Health and readiness probes."},
+    ],
+    lifespan=lifespan,
+)
+
+
+class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
+    """Mark legacy unversioned `/api/*` responses as deprecated (RFC 8594)."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith(_LEGACY_PREFIX + "/") and not path.startswith(_V1_PREFIX):
+            response.headers["Deprecation"] = "true"
+            response.headers["Sunset"] = _SUNSET
+            response.headers["Link"] = f'<{_V1_PREFIX}>; rel="successor-version"'
+        return response
+
 
 # Observability (outermost — captures everything)
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(RequestTimingMiddleware)
+app.add_middleware(DeprecationHeaderMiddleware)
 
 # Rate limiting
 app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
@@ -74,44 +113,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(ingest_router, prefix="/api")
-app.include_router(chat_router, prefix="/api")
+# v1 (typed envelopes) + legacy (unversioned, deprecated)
+app.include_router(v1_ingest_router, prefix=_V1_PREFIX)
+app.include_router(v1_chat_router, prefix=_V1_PREFIX)
+app.include_router(legacy_ingest_router, prefix=_LEGACY_PREFIX)
+app.include_router(legacy_chat_router, prefix=_LEGACY_PREFIX)
+
+# Unified RFC 9457 problem+json error model (application-wide)
+register_error_handlers(app)
 
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    errors = [{"field": e["loc"][-1], "message": e["msg"]} for e in exc.errors()]
-    return JSONResponse(status_code=422, content={"error": "Validation failed", "details": errors})
-
-
-@app.exception_handler(ValueError)
-async def value_error_handler(request: Request, exc: ValueError):
-    logger.warning("Value error on %s %s: %s", request.method, request.url.path, exc)
-    return JSONResponse(status_code=400, content={"error": "Bad request", "detail": str(exc)})
-
-
-@app.exception_handler(RuntimeError)
-async def runtime_error_handler(request: Request, exc: RuntimeError):
-    # Log the full detail server-side, but never echo internal error text to the
-    # client — it can leak file paths, upstream messages, or infra detail.
-    logger.error("Runtime error on %s %s: %s", request.method, request.url.path, exc)
-    return JSONResponse(status_code=500, content={"error": "Internal server error"})
-
-
-@app.exception_handler(Exception)
-async def generic_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"error": "Internal server error"})
-
-
-@app.get("/health")
+@app.get("/health", response_model=DependencyHealth, tags=["system"])
 def health_check():
     deps = {"redis": "ok" if _redis_ok else "unavailable", "chromadb": "ok" if _chroma_ok else "unavailable"}
     status = "ok" if (_redis_ok and _chroma_ok) else "degraded"
     return {"status": status, "dependencies": deps}
 
 
-@app.get("/ready")
+@app.get("/ready", tags=["system"])
 def readiness_check():
     """Live readiness probe — checks actual connectivity right now."""
     deps = {}
@@ -138,6 +157,6 @@ def readiness_check():
     )
 
 
-@app.get("/")
+@app.get("/", tags=["system"])
 def home():
     return {"message": "Chatbot Running"}

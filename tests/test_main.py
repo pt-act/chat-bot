@@ -49,40 +49,42 @@ class TestLifespan:
 
 
 class TestExceptionHandlers:
-    def test_value_error_returns_400(self):
+    """The unified RFC 9457 (problem+json) error model — see middlewares/errors.py."""
+
+    def _app_with_handlers(self):
         from fastapi import FastAPI
 
+        from middlewares.errors import register_error_handlers
+
         app = FastAPI()
+        register_error_handlers(app)
+        return app
+
+    def test_value_error_returns_problem_400(self):
+        app = self._app_with_handlers()
 
         @app.get("/error")
-        def raise_value_error():
+        def boom():
             raise ValueError("bad input")
 
-        # Copy handlers from main
-        app.exception_handler(ValueError)(main_module.value_error_handler)
-
-        client = TestClient(app)
-        resp = client.get("/error")
+        resp = TestClient(app, raise_server_exceptions=False).get("/error")
         assert resp.status_code == 400
-        assert "bad input" in resp.json()["detail"]
+        body = resp.json()
+        assert body["title"] == "Bad request"
+        assert body["status"] == 400
+        assert "bad input" in body["detail"]
 
-    def test_runtime_error_returns_500(self):
-        from fastapi import FastAPI
-
-        app = FastAPI()
+    def test_runtime_error_returns_generic_problem_500(self):
+        app = self._app_with_handlers()
 
         @app.get("/error")
-        def raise_runtime_error():
+        def boom():
             raise RuntimeError("system failure")
 
-        # Copy handlers from main
-        app.exception_handler(RuntimeError)(main_module.runtime_error_handler)
-
-        client = TestClient(app)
-        resp = client.get("/error")
+        resp = TestClient(app, raise_server_exceptions=False).get("/error")
         assert resp.status_code == 500
         # The internal exception message must NOT be echoed to the client (M-3).
         body = resp.json()
         assert "system failure" not in str(body)
-        assert body["error"] == "Internal server error"
+        assert body["title"] == "Internal server error"
         assert "detail" not in body
