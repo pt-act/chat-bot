@@ -23,6 +23,7 @@ langchain-community==0.4.1
 langchain-chroma==1.1.0
 
 tiktoken==0.12.0
+tenacity==9.1.2  # provider retry/backoff (utils/resilience.py) — transient 429/5xx don't fail a turn
 lingua-language-detector==2.1.1  # statistical EN/PT fallback for short, unaccented inputs
 python-json-logger==2.0.7
 fastembed==0.8.0
@@ -31,3 +32,4 @@ pillow>=12.2.0  # fastembed dependency — pinned to avoid CVEs in <12.2.0
 pypdf==6.11.0
 docx2txt==0.9          # .docx text extraction (lightweight, pure-Python)
 beautifulsoup4==4.14.2  # .html/.htm text extraction (uses the stdlib html.parser)
+rank-bm25==0.2.2  # lexical retrieval for the optional hybrid strategy (RETRIEVAL_STRATEGY=hybrid)

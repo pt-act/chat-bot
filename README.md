@@ -46,8 +46,8 @@
 
 This project is a **production-grade AI chatbot backend** built using:
 
-* 🧠 LangGraph for conversation orchestration (7-node pipeline)
-* 🔍 RAG pipeline using ChromaDB with mode-aware score gating
+* 🧠 LangGraph for conversation orchestration (8-node pipeline)
+* 🔍 RAG pipeline using ChromaDB with mode-aware score gating, context-aware query rewriting, and groundedness verification
 * 💬 Multi-LLM support (14 providers via universal OpenAI-compatible adapter)
 * ⚡ FastAPI for backend APIs with auth, rate limiting, and observability
 * 🧠 Redis for memory storage, rate limiting, and ingestion registry
@@ -67,6 +67,18 @@ It supports:
 * Structured JSON logging with correlation ID tracing
 * Fully local deployment with Ollama (zero cloud API keys)
 * Multilingual responses (Arabic / English / European Portuguese)
+* Versioned, typed HTTP API (`/api/v1`) with RFC 9457 `problem+json` errors and per-request controls
+* SSE token streaming (`/api/v1/chat/stream`) with structured citations (label, doc_id, score, page, snippet)
+* Context-aware query rewriting — condenses multi-turn follow-ups into a standalone search query before retrieval
+* Groundedness verification — surfaces `meta.grounded`; strict mode refuses answers unsupported by the retrieved chunks
+* Persistent feedback (`POST /api/v1/feedback`) feeding a moderator queue and the RAGAS golden set
+* Provider resilience — transient 429/5xx retries with backoff + an in-process circuit breaker
+* Durable, retryable ingestion (`INGEST_MODE=queue`) with a worker that survives restarts
+* Configurable persona / domain / refusal copy — deploy as your own assistant with three env vars
+* Optional hybrid retrieval (dense + BM25 via RRF) for lexical recall of acronyms / SKUs / exact phrases
+* Guardrails — input prompt-injection blocking + output PII masking / length cap (config-toggleable)
+* RAGAS evaluation harness (`eval/`) — offline faithfulness / relevancy / context precision+recall
+* Reference web client (`web/`) — Vite + React + TypeScript SPA demonstrating the v1 API, incl. a reviewer panel
 * Kubernetes-ready health/ready probes
 * Scalable backend design
 
@@ -99,11 +111,13 @@ Making it suitable for real-world SaaS integrations.
 │     LangGraph Orchestrator   │
            │                              │
            │  1. load_memory   (Redis)    │
-           │  2. retrieve_context (Chroma)│ ← mode-aware score gate
-           │  3. generate_answer  (LLM)   │ ← mode-specific prompt
-           │  4. self_ingest  (Chroma)    │ ← learning mode only
-           │  5. summarize                │
-           │  6. store_memory  (Redis)    │
+           │  2. condense_query  (LLM)    │ ← context-aware rewrite (multi-turn)
+           │  3. retrieve_context (Chroma)│ ← mode-aware gate + mmr/hybrid
+           │  4. generate_answer  (LLM)   │ ← mode-specific prompt
+           │  5. verify_answer            │ ← groundedness gate (strict refuses)
+           │  6. self_ingest  (Chroma)    │ ← learning mode only
+           │  7. summarize                │
+           │  8. store_memory  (Redis)    │
           └──────────────────────────────┘
                          │
                          ▼
@@ -118,10 +132,12 @@ Making it suitable for real-world SaaS integrations.
 2. System loads conversation history from Redis
 3. Relevant documents are retrieved from ChromaDB (RAG) — behavior depends on `CHAT_MODE`
 4. LangGraph orchestrates the flow:
-   - memory → retrieval → reasoning → self-ingest (if learning) → response
-5. LLM generates a final contextual answer — mode-specific prompt controls behavior
-6. In learning mode, synthesized answers are auto-ingested into ChromaDB as new knowledge
-7. Conversation is updated + summarized for future use
+   - memory → condense query → retrieval → reasoning → verify groundedness → self-ingest (if learning) → response
+5. On multi-turn follow-ups, the question is condensed into a standalone search query before retrieval
+6. LLM generates a final contextual answer — mode-specific prompt controls behavior
+7. The answer's groundedness is verified against the retrieved chunks — strict mode refuses when unsupported
+8. In learning mode, synthesized answers are auto-ingested into ChromaDB as new knowledge
+9. Conversation is updated + summarized for future use
 
 ## 🗂️ Project Structure
 
@@ -131,27 +147,41 @@ chat-bot/
 ├── middlewares/          # Rate limiting middleware
 ├── db/                   # Redis and ChromaDB clients
 ├── graph/
-│   ├── builder.py        # LangGraph pipeline definition (6 nodes + edges)
-│   ├── state.py          # State TypedDict (chat_mode, best_score, last_answer, self_ingested)
+│   ├── builder.py        # LangGraph pipeline definition (8 nodes + edges)
+│   ├── state.py          # State TypedDict (chat_mode, best_score, search_query, grounded, …)
 │   └── nodes/            # Individual graph nodes
 │       ├── load_memory.py       # Load conversation history from Redis
-│       ├── retrieve_context.py  # Mode-aware score gate + MMR retrieval
-│       ├── generate_answer.py   # Mode-specific prompt → LLM call
+│       ├── condense_query.py    # Rewrite follow-ups into a standalone search query (#1)
+│       ├── retrieve_context.py  # Mode-aware score gate + MMR / hybrid retrieval
+│       ├── generate_answer.py   # Mode-specific prompt → LLM call (resilient)
+│       ├── verify_answer.py     # Groundedness verification + strict refusal (#2)
 │       ├── self_ingest.py       # Auto-ingest synthesized answers (learning mode)
 │       ├── store_memory.py      # Save conversation to Redis
 │       └── summarize.py        # Conversation summarization
-├── ingest/               # Incremental document ingestion pipeline
+├── ingest/               # Document ingestion pipeline
+│   ├── loaders.py        # Multi-format loader registry (PDF/TXT/MD/DOCX/HTML)
+│   ├── retrieval.py      # Hybrid (dense + BM25) retrieval + RRF fusion (Phase 4)
+│   ├── queue.py          # Durable Redis-backed ingest queue (#4)
+│   └── worker.py         # `python -m ingest.worker` — durable ingest worker
+├── feedback/             # Feedback Redis keys (#3)
 ├── prompts/
-│   ├── answer.py         # 3 mode-specific prompt builders (strict, open, learning)
+│   ├── answer.py         # 3 mode-specific prompt builders (config-driven persona)
+│   ├── condense.py       # Query-rewrite prompt
+│   ├── verify.py         # LLM groundedness-judge prompt
 │   └── summarize.py      # Conversation summarization prompt
 ├── schemas/
 │   ├── chat.py           # ChatRequest schema
+│   ├── feedback.py       # Feedback request/response schemas
 │   └── ingest.py         # IngestRequest schema
 ├── services/
-│   └── chat_service.py   # Injects chat_mode from settings, returns self_ingested flag
-├── tests/                # Pytest test suite (91 tests across 5 test files)
+│   ├── chat_service.py   # Runs the graph / streaming path; returns grounded + self_ingested
+│   └── feedback_service.py  # Persist feedback + export downvotes to the golden set
+├── utils/
+│   └── resilience.py     # Provider retry/backoff + circuit breaker (#14)
+├── eval/                 # RAGAS harness + corpus seeder + golden set
+├── tests/                # Pytest test suite (300+ tests, 97% coverage)
 ├── main.py               # App entrypoint
-├── config.py             # Settings (pydantic-settings) — CHAT_MODE, SELF_INGEST_MIN_LENGTH
+├── config.py             # Settings (pydantic-settings) — all feature flags
 ├── pytest.ini            # Test configuration
 ├── requirements.txt
 ├── requirements-dev.txt  # Test dependencies (pytest, fakeredis, responses, fpdf2)
@@ -349,6 +379,11 @@ Or run with Docker (includes Redis):
 docker-compose up --build
 ```
 
+> The compose stack runs three services — `api`, a durable ingest `worker`
+> (`python -m ingest.worker`), and `redis` — with `INGEST_MODE=queue` so ingestion
+> survives API restarts (see [Durable ingestion](#-6-document-ingestion-s3--chromadb)).
+> For a single-process setup, set `INGEST_MODE=inline` (the code default) and drop the worker.
+
 #### Fully Local Deployment (Ollama + FastEmbed — zero cloud API keys)
 
 For air-gapped, privacy-first, or zero-cost deployment, use the local compose file with Ollama:
@@ -517,7 +552,7 @@ Response:
   "sources": [
     {"label": "return_policy.pdf", "doc_id": "return_policy", "score": 0.82, "page": 3, "snippet": "Customers may return..."}
   ],
-  "meta": {"mode": "strict", "lang": "en", "self_ingested": false, "correlation_id": "…", "model": "gpt-4o-mini"}
+  "meta": {"mode": "strict", "lang": "en", "self_ingested": false, "grounded": "supported", "grounded_score": 0.83, "correlation_id": "…", "model": "gpt-4o-mini"}
 }
 ```
 
@@ -538,6 +573,27 @@ includes a `X-Correlation-Id` header and rate-limit headers
 
 > `X-User-Id` scopes per-user conversation memory (defaults to `anonymous`). It is
 > validated (`[A-Za-z0-9_.@-]{1,128}`) and namespaced internally.
+
+> **Groundedness (`meta.grounded`):** when documents back the answer, `verify_answer`
+> reports `supported | partial | unsupported` (+ `grounded_score`). In **strict** mode an
+> `unsupported` answer is replaced by the "Not in the knowledge base" refusal and its
+> sources cleared (`STRICT_REFUSE_ON_UNGROUNDED`). On the streaming path this applies to
+> the stored answer + `done` meta (tokens already streamed cannot be retracted).
+
+### Feedback (`POST /api/v1/feedback`)
+
+Capture 👍/👎 on an answer (open to end users; the turn's correlation id is captured
+automatically). Downvotes can be exported into the RAGAS golden set to close the loop.
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/feedback" \
+  -H "Content-Type: application/json" \
+  -d '{"rating":"down","reason":"cited the wrong policy","question":"return window?"}'
+# → 201  {"feedback_id":"a1b2c3d4e5f6","rating":"down","status":"recorded"}
+
+# Operators list feedback (API-key gated, like review/ingest):
+curl "http://127.0.0.1:8000/api/v1/feedback?rating=down&limit=50&cursor=0"
+```
 
 ## 🏥 8. Health & Readiness
 
@@ -821,11 +877,22 @@ Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL
 
 * ✅ Conversational memory (short + long-term via Redis)
 * ✅ RAG retrieval with mode-aware score gate + MMR diversity ranking
+* ✅ Context-aware query rewriting — condenses multi-turn follow-ups into a standalone search query before retrieval (`QUERY_REWRITE_ENABLED`)
+* ✅ Groundedness / faithfulness verification — `meta.grounded` (supported/partial/unsupported); strict mode refuses answers unsupported by the retrieved chunks (`GROUNDEDNESS_ENABLED`)
+* ✅ Persistent feedback loop — `POST /api/v1/feedback` (👍/👎 + reason) → operator queue + export of downvotes to the RAGAS golden set
+* ✅ Provider resilience — retry transient 429/5xx/timeouts with backoff + in-process circuit breaker (`utils/resilience.py`)
+* ✅ Durable, retryable ingestion — `INGEST_MODE=queue` with a Redis-backed worker that survives restarts (idempotent, retrying)
+* ✅ Configurable persona / domain / refusal copy — rebrand the assistant with `ASSISTANT_NAME` / `KNOWLEDGE_DOMAIN` / `ESCALATION_MESSAGE` (defaults unchanged)
+* ✅ Optional hybrid retrieval — dense + BM25 fused via RRF (`RETRIEVAL_STRATEGY=hybrid`) for acronym/SKU/exact-phrase recall
 * ✅ Four chat modes: strict (knowledge-base-only), open (general knowledge), learning (growing KB), learning_review (review-gated KB growth)
 * ✅ Self-ingest in learning mode — synthesized answers captured with provenance metadata
 * ✅ `learning_review` mode — two-phase ingest: synthesized answers queued for human approve/reject before embedding (`/api/v1/review/*`)
 * ✅ Guardrails — input prompt-injection/jailbreak blocking + output PII masking and length cap (config-toggleable)
 * ✅ RAGAS evaluation harness — offline faithfulness / relevancy / context precision+recall (`eval/`)
+* ✅ Versioned, typed API (`/api/v1`) — Pydantic response envelopes with RFC 9457 `application/problem+json` errors; unversioned `/api/*` still works but is deprecated
+* ✅ SSE streaming — `POST /api/v1/chat/stream` emits `token` → `sources` → `done` (and `error`) Server-Sent Events
+* ✅ Per-request controls — `mode`, `lang`, `top_k`, `score_threshold` override server defaults per call
+* ✅ Reference web client (`web/`) — Vite + React + TypeScript SPA: streaming chat, mode/language selectors, structured citations, RTL/Arabic rendering, health badge, and a `learning_review` reviewer panel
 * ✅ 14 LLM providers with universal OpenAI-compatible adapter + provider aliases
 * ✅ 7+ embedding models via FastEmbed (ONNX, ~50MB, zero CVEs) + model registry
 * ✅ API key authentication (FastAPI dependency injection) on destructive ingest endpoints
@@ -834,19 +901,19 @@ Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL
 * ✅ CORS hardened — default `[]`, production must opt-in
 * ✅ Observability — correlation ID tracing, request timing, structured JSON logging
 * ✅ Kubernetes-ready — cached `/health` + live `/ready` probes with dependency-specific error details
-* ✅ Citations — every answer includes which source documents were used
+* ✅ Structured citations — each source carries `label`, `doc_id`, `score`, `page`, and `snippet` (v1 API; legacy `/api/chat` keeps bare label strings)
 * ✅ Conversational follow-ups — context-aware replies when no document match exists
 * ✅ Multi-format ingestion — PDF, TXT, Markdown, DOCX, HTML via a pluggable loader registry (`ingest/loaders.py`)
 * ✅ Two ingest paths — remote URL pull **or** local file upload (multipart), so documents can stay on-prem / private
 * ✅ Incremental ingestion — only re-embeds changed chunks, not the whole document
 * ✅ Ingestion safeguards — duplicate submission protection, file size limits, status polling endpoint
 * ✅ Global duplicate detection — same PDF under different names caught via content hash
-* ✅ Multilingual responses (Arabic / English / European Portuguese auto-detected)
-* ✅ LangGraph workflow orchestration (7-node pipeline)
+* ✅ Multilingual responses (Arabic / English / European Portuguese) — hybrid auto-detection: Arabic by script + a dependency-free Portuguese diacritic/stopword heuristic, with a [lingua](https://github.com/pemistahl/lingua-py) EN/PT statistical fallback for short ambiguous inputs
+* ✅ LangGraph workflow orchestration (8-node pipeline)
 * ✅ FastAPI production API layer
 * ✅ Dockerized — cloud deployment (docker-compose.yml) + local deployment (docker-compose.local.yml with Ollama)
 * ✅ Structured logging to console + rotating file (logs/app.log, 10 MB cap)
-* ✅ 120+ tests covering adapters, graph nodes, builder, rate limiter, security, API endpoints (97% coverage)
+* ✅ 300+ tests covering adapters, graph nodes, builder, resilience, groundedness, feedback, ingest queue, rate limiter, security, API endpoints (97% coverage) + a hermetic retrieval-regression test
 
 ## 🧩 TODO (Roadmap)
 
@@ -860,6 +927,15 @@ Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL
 * [x] Guardrails (input prompt-injection blocking + output PII masking / length cap)
 * [x] Evaluation (RAGAS) — offline harness (`eval/`)
 * [x] Learning mode review workflow (two-phase ingest for synthesized entries)
+* [x] Context-aware query rewriting (condense follow-ups before retrieval)
+* [x] Groundedness / faithfulness verification (strict-mode anti-hallucination gate)
+* [x] Persistent feedback + closed quality loop (feedback → review queue / golden set)
+* [x] Provider retry/backoff + circuit breaker
+* [x] Durable, retryable ingestion (queue + worker)
+* [x] Configurable persona / domain / refusal copy
+* [x] Hermetic retrieval-regression test + opt-in scheduled eval CI
+* [x] Reviewer UI for the learning_review queue (web)
+* [ ] Hybrid retrieval + reranking — scaffolding shipped (`RETRIEVAL_STRATEGY`); promote to default once the eval proves a lift
 
 ## ⚡ Tech Stack
 
@@ -868,10 +944,11 @@ Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL
 * **Embeddings:** OpenAI / FastEmbed (7+ models) / HuggingFace
 * **Orchestration:** LangGraph
 * **Framework:** LangChain
-* **Vector DB:** ChromaDB
-* **Cache / Memory:** Redis
+* **Vector DB:** ChromaDB (dense) + BM25 (`rank-bm25`, optional hybrid)
+* **Cache / Memory / Queue:** Redis (memory, rate limiting, ingest registry + durable ingest queue)
+* **Resilience:** tenacity (retry/backoff) + in-process circuit breaker
 * **Runtime:** Python 3.10+
-* **Container:** Docker + Docker Compose (cloud + local)
+* **Container:** Docker + Docker Compose (API + worker + Redis; local + cloud)
 
 ## 🤝 Contributing
 
@@ -881,13 +958,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide — setup, code standa
 ```bash
 conda create -n chat-bot python=3.10 && conda activate chat-bot
 pip install -r requirements.txt -r requirements-dev.txt
-pytest  # 120+ tests, 97% coverage
+pytest  # 300+ tests, 97% coverage
 ```
 
 **Good first contributions:**
 - Add a new document loader (DOCX, TXT, HTML) in `ingest/`
 - Expand the guardrail patterns (`guardrails/`) or the RAGAS golden set (`eval/golden.jsonl`)
-- Add a reviewer UI in `web/` for the learning-mode review queue (`/api/v1/review/*`)
+- Wire a concrete reranker into `ingest/retrieval.rerank` (FastEmbed / cross-encoder) behind `RETRIEVAL_STRATEGY=hybrid_rerank`
+- Grow the eval golden set (`eval/golden.jsonl`) or the retrieval-regression corpus (`tests/test_retrieval_regression.py`)
 - Add a new FastEmbed model to the registry in `utils/embedding_adapter.py`
 
 > Please open an issue before starting large changes so we can discuss approach first.
@@ -910,11 +988,26 @@ See [CHANGELOG.md](CHANGELOG.md) for version history, detailed changes, and the 
 
 This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-bot`](https://github.com/hasandeveloper/chat-bot) with significant enhancements:
 
-| Dimension | Upstream (v1.0.0) | This Fork (v2.0.0) |
+| Dimension | Upstream (v1.0.0) | This Fork (v2.4.0) |
 |-----------|--------------------|---------------------|
 | LLM providers | 3 (OpenAI, Anthropic, Groq) | 14 (universal adapter) |
 | Chat modes | 1 (strict only) | 4 (strict, open, learning, learning_review) |
-| Self-ingestion | None | Learning mode with quality gate |
+| Multi-turn retrieval | Raw last message | Context-aware query rewriting (condense follow-ups) |
+| Answer faithfulness | Unverified | Groundedness verification + strict-mode refusal of unsupported answers |
+| Feedback | None | Persistent 👍/👎 (`/api/v1/feedback`) → review queue + golden-set export |
+| Provider failures | Fail the turn | Retry transient 429/5xx with backoff + circuit breaker |
+| Ingestion durability | In-process `BackgroundTasks` | Optional durable Redis queue + worker (survives restarts, retries) |
+| Persona / branding | Hard-coded "our company" | Configurable name / domain / refusal copy (defaults unchanged) |
+| Retrieval strategy | Dense MMR | Dense MMR + optional hybrid (BM25 + RRF) |
+| Self-ingestion | None | Learning mode with quality gate + two-phase review (`learning_review`: queued for human approve/reject before embedding) |
+| Languages | 2 (English / Arabic) | 3 (English / Arabic / European Portuguese) + hybrid auto-detection (script + diacritic/stopword heuristic + lingua fallback) |
+| Document formats | PDF only | PDF / TXT / Markdown / DOCX / HTML (pluggable loader registry) |
+| Ingest sources | URL / S3 pull | URL pull + local file upload (multipart, on-prem friendly) |
+| HTTP API | Unversioned `/api/*` | Versioned `/api/v1` (typed envelopes) + RFC 9457 `problem+json` errors |
+| Streaming | None | SSE token streaming (`POST /api/v1/chat/stream`) |
+| Guardrails | None | Input prompt-injection blocking + output PII masking / length cap |
+| Evaluation | None | RAGAS offline harness (faithfulness / relevancy / context precision+recall) |
+| Web client | None | Vite + React + TypeScript reference SPA (`web/`) |
 | Authentication | None | API key (FastAPI DI) |
 | SSRF protection | None | Private IP + metadata blocking |
 | Rate limiting | Direct IP only | Proxy-aware (CIDR, X-Forwarded-For) |
@@ -922,7 +1015,7 @@ This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-
 | Logging | Text only | Text + JSON (structured) |
 | Health probes | `/health` (static) | `/health` (cached) + `/ready` (live) |
 | CI/CD | Basic (ruff + pytest) | Full (ruff + bandit + pip-audit + coverage + Docker) |
-| Test count | ~10 | 120+ (97% coverage) |
+| Test count | ~10 | 300+ (97% coverage) + hermetic retrieval-regression |
 | Audit score | 72/100 (C+) | 95/100 (A+) |
 | Local deployment | None | docker-compose.local.yml (Ollama + FastEmbed) |
 

@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage
 
 from prompts.summarize import build_summarize_prompt
 from utils.llm_adapter import get_llm
+from utils.resilience import resilient_invoke
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def summarize(state):
     text = "\n".join(f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in messages)
 
     prompt = build_summarize_prompt(text=text, lang=lang)
-    summary = _get_chat().invoke(prompt)
+    summary = resilient_invoke(_get_chat().invoke, prompt)
 
     logger.info("Summarized conversation (%d messages, lang=%s)", len(messages), lang)
 

@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Composer } from "./components/Composer";
 import { Controls } from "./components/Controls";
 import { HealthBadge } from "./components/HealthBadge";
 import { MessageList } from "./components/MessageList";
+import { ReviewPanel } from "./components/ReviewPanel";
 import { UploadButton } from "./components/UploadButton";
 import { streamChat } from "./lib/api";
 import type { ChatMessage, Lang, Mode, Source } from "./types";
@@ -23,7 +24,19 @@ export function App() {
   const [mode, setMode] = useState<Mode>("strict");
   const [lang, setLang] = useState<Lang>("auto");
   const [busy, setBusy] = useState(false);
+  const [review, setReview] = useState(() => window.location.hash === "#/review");
   const abortRef = useRef<AbortController | null>(null);
+
+  // Keep the Review view in sync with the URL hash (#/review).
+  useEffect(() => {
+    const onHash = () => setReview(window.location.hash === "#/review");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const toggleReview = useCallback(() => {
+    window.location.hash = review ? "" : "#/review";
+  }, [review]);
 
   const patchLast = useCallback((fn: (m: ChatMessage) => ChatMessage) => {
     setMessages((prev) => {
@@ -86,17 +99,38 @@ export function App() {
       <header className="header">
         <h1 className="title">Chatbot</h1>
         <div className="header-right">
-          <Controls mode={mode} lang={lang} disabled={busy} onMode={setMode} onLang={setLang} />
-          <UploadButton userId={userId()} disabled={busy} />
+          {!review && (
+            <>
+              <Controls mode={mode} lang={lang} disabled={busy} onMode={setMode} onLang={setLang} />
+              <UploadButton userId={userId()} disabled={busy} />
+            </>
+          )}
+          <button
+            type="button"
+            className="btn btn-upload"
+            aria-pressed={review}
+            onClick={toggleReview}
+            title="Toggle the operator review queue"
+          >
+            {review ? "Chat" : "Review"}
+          </button>
           <HealthBadge />
         </div>
       </header>
-      <main className="main">
-        <MessageList messages={messages} />
-      </main>
-      <footer className="footer">
-        <Composer busy={busy} onSend={send} onStop={stop} />
-      </footer>
+      {review ? (
+        <main className="main">
+          <ReviewPanel />
+        </main>
+      ) : (
+        <>
+          <main className="main">
+            <MessageList messages={messages} />
+          </main>
+          <footer className="footer">
+            <Composer busy={busy} onSend={send} onStop={stop} />
+          </footer>
+        </>
+      )}
     </div>
   );
 }

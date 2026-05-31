@@ -3,7 +3,7 @@
 Technical reference for engineers and operators. For consumer usage see
 [`user_guidelines.md`](user_guidelines.md); for setup see [`README.md`](README.md).
 
-**Version:** API 2.3.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-05-31
+**Version:** API 2.4.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-05-31
 
 ---
 
@@ -27,6 +27,20 @@ never dropped; citation scores are obtained alongside it (see §6, §15).
 English and Arabic) via a hybrid auto-detector (`utils/lang_detect.py`) — a fast,
 dependency-free heuristic with a lingua statistical fallback for short ambiguous inputs
 (see §6, §15). Additive and backward compatible: `lang` still defaults to `auto`.
+
+**v2.3.0** adds multi-format ingestion (PDF/TXT/MD/DOCX/HTML) + local upload, guardrails,
+the RAGAS harness, and the `learning_review` two-phase ingest mode.
+
+**v2.4.0** is a quality/trust/reliability release (top-5 proposals + honorable mentions —
+see `docs/audit/implementation-plan.md`). It adds two pipeline nodes — **`condense_query`**
+(context-aware query rewriting, #1) and **`verify_answer`** (groundedness verification with
+a strict-mode refusal gate, #2) — a **persistent feedback** endpoint feeding the review
+queue / golden set (#3), **provider resilience** (retry/backoff + circuit breaker, #14),
+**durable queue-based ingestion** with a worker (#4), **configurable persona/refusal copy**
+(#5), optional **hybrid (dense + BM25) retrieval** behind `RETRIEVAL_STRATEGY` (Phase 4),
+a hermetic **retrieval-regression test** + opt-in eval CI (#19), and a **reviewer UI** (#29).
+Every change is behind a `config.Settings` flag whose default preserves prior behavior; the
+pipeline is now **8 nodes** and the API contract is backward compatible.
 
 ---
 
@@ -85,8 +99,14 @@ dependency-free heuristic with a lingua statistical fallback for short ambiguous
 | Controllers (v1) | `controllers/v1/{chat,ingest}.py` | Typed envelopes, SSE streaming, async ingest, pagination. |
 | Controllers (legacy) | `controllers/{chat,ingest}_controller.py` | Backward-compatible unversioned endpoints. |
 | Services | `services/{chat,ingest}_service.py` | Orchestrate the graph / ingest pipeline; `stream_conversation`. |
-| Graph | `graph/builder.py`, `graph/state.py`, `graph/nodes/*` | RAG pipeline nodes & wiring. |
+| Graph | `graph/builder.py`, `graph/state.py`, `graph/nodes/*` | RAG pipeline nodes & wiring (8 nodes incl. `condense_query`, `verify_answer`). |
+| Query rewrite | `graph/nodes/condense_query.py`, `prompts/condense.py` | Condense multi-turn follow-ups into a standalone search query before retrieval (#1). |
+| Groundedness | `graph/nodes/verify_answer.py`, `prompts/verify.py` | Verify answer support vs. retrieved chunks; strict-mode refusal of unsupported answers (#2). |
+| Resilience | `utils/resilience.py` | `resilient_invoke`/`@resilient_call`: tenacity retry on transient errors + in-process circuit breaker (#14). |
+| Feedback | `services/feedback_service.py`, `feedback/keys.py`, `controllers/v1/feedback.py`, `schemas/feedback.py` | Persist 👍/👎 (+reason), list (API-key gated), export downvotes to the golden set (#3). |
 | Ingest | `ingest/policies.py`, `ingest/loaders.py`, `ingest/keys.py` | URL download **or** local upload → shared `_run_ingest` (load→chunk→embed→upsert); multi-format loader registry (PDF/TXT/MD/DOCX/HTML); Redis key constants. |
+| Durable ingest | `ingest/queue.py`, `ingest/worker.py` | `INGEST_MODE=queue`: Redis-list job queue + worker, retries + per-`doc_id` idempotency lock (#4). |
+| Hybrid retrieval | `ingest/retrieval.py` | Dense + BM25 fused via RRF + rerank hook; gated by `RETRIEVAL_STRATEGY` (Phase 4). |
 | DB | `db/redis_client.py`, `db/vector.py` | Redis client + `memory_key`; Chroma accessors + `VectorStoreRepository`. |
 | Adapters | `utils/llm_adapter.py`, `utils/embedding_adapter.py` | Provider selection. |
 | Language detection | `utils/lang_detect.py` | Resolve response language (EN/AR/PT): script + heuristic, lingua fallback. |
@@ -106,20 +126,27 @@ dependency-free heuristic with a lingua statistical fallback for short ambiguous
    window and sets `X-RateLimit-*`.
 2. Controller validates `X-User-Id`, calls `chat_service.conversation(...)` with overrides.
 3. `conversation` builds the initial `State` and invokes the compiled graph.
-4. Graph runs: `load_memory → retrieve_context → generate_answer → self_ingest →
-   summarize → store_memory`.
-5. Controller maps the result to `ChatResponse` (answer + structured `sources` + `meta`).
+4. Graph runs: `load_memory → condense_query → retrieve_context → generate_answer →
+   verify_answer → self_ingest → summarize → store_memory`.
+5. Controller maps the result to `ChatResponse` (answer + structured `sources` + `meta`,
+   incl. `grounded`/`grounded_score`).
 
 ### Streaming chat (`POST /api/v1/chat/stream`)
-`stream_conversation` runs `load_memory` + `retrieve_context` synchronously, **streams**
-the LLM answer token-by-token (`get_llm(...).stream(prompt)` via the shared
-`build_chat_prompt`), then runs `self_ingest → summarize → store_memory` **after** the
-stream so memory persists even though the client saw tokens first. Emits SSE
-`token`/`sources`/`done` (and `error` on failure, with no internal text).
+`stream_conversation` runs `load_memory` + `condense_query` + `retrieve_context`
+synchronously, **streams** the LLM answer token-by-token (the initial connection is
+retried via the resilience layer; once tokens flow it is not replayed), then runs
+`verify_answer → self_ingest → summarize → store_memory` **after** the stream so memory
+persists even though the client saw tokens first. Emits SSE `token`/`sources`/`done`
+(and `error` on failure, with no internal text). A strict-mode groundedness refusal
+applies to the stored answer + `done` meta, not to tokens already streamed.
 
 ### Async ingest (`POST /api/v1/ingest`, `POST /api/v1/ingest/upload`)
-Writes an initial `queued` status to Redis, schedules a background task via FastAPI
-`BackgroundTasks`, returns `202` + `Location`. **URL path:** `process_policy` downloads
+Writes an initial `queued` status to Redis and returns `202` + `Location`. With
+`INGEST_MODE=inline` (default) it schedules a FastAPI `BackgroundTasks` job; with
+`INGEST_MODE=queue` it pushes a job onto a Redis list that the `ingest.worker` process
+consumes (durable across API restarts, retries transient failures up to
+`INGEST_MAX_ATTEMPTS`, idempotent via a per-`doc_id` lock; uploads stage to the shared
+`INGEST_INCOMING_DIR`). **URL path:** `process_policy` downloads
 (SSRF-guarded, no redirects) to a temp file. **Upload path:** the controller validates the
 extension (PDF also gets a `%PDF` magic check), streams the `multipart` file to a temp file
 (`MAX_FILE_SIZE_MB` cap), then `process_uploaded` runs. Both pass the detected extension to
@@ -133,19 +160,24 @@ changed chunks, records `done`/`failed`, and removes the temp file.
 ## 6. LangGraph pipeline
 
 `State` (TypedDict, `total=False`): `user_id, question, messages, docs, summary,
-sources, chat_mode, best_score, last_answer, self_ingested, lang, top_k, score_threshold`.
+sources, chat_mode, best_score, last_answer, self_ingested, search_query, grounded,
+grounded_score, lang, top_k, score_threshold`.
 
 | Node | Reads | Writes | Notes |
 |------|-------|--------|-------|
 | `load_memory` | `user_id` | `messages`, `summary` | Reads `chat:memory:{user_id}` from Redis. |
-| `retrieve_context` | `question`, `chat_mode`, `top_k`, `score_threshold` | `docs`, `sources`, `best_score` | Relevance gate (strict blocks below threshold) → **MMR** for diverse selection above threshold; learning also queries the synthesized store. Returns structured citations with scores joined from the scored candidate pool. |
-| `generate_answer` | `summary`, `messages`, `docs`, `question`, `lang`, `chat_mode` | `messages`, `last_answer`, `lang` | Resolves language via `utils.lang_detect` — explicit `en`/`ar`/`pt` bypass detection, `auto` runs the hybrid detector (script → heuristic → lingua); calls the LLM. |
+| `condense_query` | `question`, `messages`, `summary` | `search_query` | #1. Pass-through on the first turn or when `QUERY_REWRITE_ENABLED=false` (no LLM call). Otherwise an LLM (temp 0, ≤64 tokens, resilient) rewrites the follow-up into a standalone query. |
+| `retrieve_context` | `search_query`/`question`, `chat_mode`, `top_k`, `score_threshold` | `docs`, `sources`, `best_score` | Searches on `search_query` (falls back to `question`). Relevance gate (strict blocks below threshold) → `RETRIEVAL_STRATEGY` selection above threshold: **MMR** (default) or **hybrid** (dense + BM25 via RRF); learning also queries the synthesized store. Citations keep scores joined from the scored candidate pool. |
+| `generate_answer` | `summary`, `messages`, `docs`, `question`, `lang`, `chat_mode` | `messages`, `last_answer`, `lang` | Resolves language via `utils.lang_detect`; builds the prompt with config-driven persona (`ASSISTANT_NAME`/`KNOWLEDGE_DOMAIN`/`ESCALATION_MESSAGE`); calls the LLM via the resilience layer (#14). |
+| `verify_answer` | `last_answer`, `docs`, `chat_mode` | `grounded`, `grounded_score`, (`last_answer`, `sources`, `messages`) | #2. When docs present + `GROUNDEDNESS_ENABLED`: `heuristic` overlap (default) or `llm` judge → `supported`/`partial`/`unsupported`. Strict + `unsupported` + `STRICT_REFUSE_ON_UNGROUNDED` → replace answer with the refusal and clear sources. |
 | `self_ingest` | `chat_mode`, `best_score`, `last_answer` | `self_ingested`, `pending_review`, `review_entry_id` | Learning modes only. `learning` embeds into the **separate** synthesized collection; `learning_review` **queues** the answer in Redis for review (no embedding). |
 | `summarize` | `messages` | `summary`, `messages` | Summarizes when ≥4 messages; truncates to last 6. |
 | `store_memory` | `messages`, `summary`, `user_id` | — | Persists to Redis with TTL. |
 
-Edges are linear: `START → load_memory → retrieve_context → generate_answer →
-self_ingest → summarize → store_memory → END`.
+Edges are linear: `START → load_memory → condense_query → retrieve_context →
+generate_answer → verify_answer → self_ingest → summarize → store_memory → END`. The
+streaming path (`services/chat_service.stream_conversation`) runs the same nodes manually,
+keeping both paths in sync.
 
 **Language resolution (`utils/lang_detect.detect_language`).** Supported labels:
 `English`, `Arabic`, `European Portuguese`. Explicit `lang` (`en`/`ar`/`pt`) maps directly
@@ -187,6 +219,10 @@ centralized in `config.LEARNING_MODES`.
   `ingest:doc_ids` (set), `ingest:content_hashes` (hash) — centralized in `ingest/keys.py`.
 - `review:pending:{entry_id}` (hash: question, answer, best_score, created_at, status),
   `review:pending_ids` (set) — learning-review queue, centralized in `review/keys.py`.
+- `feedback:{id}` (hash: rating, reason, correlation_id, question, answer, created_at),
+  `feedback:ids` (set) — persistent answer feedback, centralized in `feedback/keys.py`.
+- `ingest:queue` (list of JSON jobs) + `ingest:lock:{doc_id}` (NX lock) — durable ingest
+  queue (`INGEST_MODE=queue`), in `ingest/queue.py`.
 
 **ChromaDB collections** (same persist dir, different names)
 - `policies` (configurable) — authoritative ingested chunks. Metadata: `doc_id`,
@@ -206,9 +242,15 @@ centralized in `config.LEARNING_MODES`.
 | `REDIS_HOST/PORT/PASSWORD` / `REDIS_TTL_SECONDS` | localhost/6379/""/86400 | Redis + memory TTL. |
 | `CHROMA_PERSIST_DIR` / `CHROMA_COLLECTION` / `SYNTHESIZED_COLLECTION` | ./chroma_db / policies / synthesized_answers | Vector store. |
 | `CHAT_MODE` / `RETRIEVAL_SCORE_THRESHOLD` / `SELF_INGEST_MIN_LENGTH` | strict / 0.3 / 50 | RAG behavior. `CHAT_MODE` ∈ `strict`/`open`/`learning`/`learning_review` (the last queues synthesized answers for review). |
+| `RETRIEVAL_STRATEGY` | mmr | `mmr` (default) / `hybrid` (dense + BM25 via RRF) / `hybrid_rerank` (Phase 4). |
+| `QUERY_REWRITE_ENABLED` | true | Context-aware query rewriting before retrieval (#1). |
+| `GROUNDEDNESS_ENABLED` / `GROUNDEDNESS_MODE` / `GROUNDEDNESS_MIN_SCORE` / `STRICT_REFUSE_ON_UNGROUNDED` | true / heuristic / 0.5 / true | Groundedness verification + strict-mode refusal of unsupported answers (#2). |
+| `PROVIDER_MAX_RETRIES` / `PROVIDER_RETRY_BASE_DELAY` / `CIRCUIT_BREAKER_ENABLED` / `CB_FAILURE_THRESHOLD` / `CB_RESET_SECONDS` | 3 / 0.5 / true / 5 / 30 | Provider retry/backoff + circuit breaker (#14). |
+| `ASSISTANT_NAME` / `KNOWLEDGE_DOMAIN` / `ESCALATION_MESSAGE` | "our company" / "" / "Please contact support." | Configurable persona / domain / refusal copy; defaults reproduce prior prompt strings (#5). |
 | `GUARDRAILS_ENABLED` / `GUARDRAILS_BLOCK_INJECTION` / `GUARDRAILS_MASK_PII` / `GUARDRAILS_MAX_ANSWER_CHARS` | true / true / false / 4000 | Input injection blocking; output PII masking + length cap. |
 | `MAX_FILE_SIZE_MB` / `DOWNLOAD_TIMEOUT_SECONDS` | 50 / 30 | Ingest limits. |
-| `API_KEY` / `REQUIRE_AUTH_FOR_INGEST` | "" / false | Ingest auth. |
+| `INGEST_MODE` / `INGEST_MAX_ATTEMPTS` / `INGEST_INCOMING_DIR` | inline / 3 / ./ingest_incoming | Durable ingestion: `queue` enqueues to Redis for the worker; retries + staged-upload dir (#4). |
+| `API_KEY` / `REQUIRE_AUTH_FOR_INGEST` | "" / false | Ingest auth (also gates `GET /feedback` and review listing). |
 | `CORS_ORIGINS` / `ALLOWED_HOSTS` / `TRUSTED_PROXIES` | [] / ["*"] / [] | CORS, SSRF allowlist, proxy-aware rate limiting. |
 | `DEBUG` / `LOG_LEVEL` / `LOG_FORMAT` | false / INFO / text | Logging (`json` for aggregators). |
 
@@ -220,13 +262,15 @@ centralized in `config.LEARNING_MODES`.
 - `POST /api/v1/chat` → `ChatResponse`
 - `POST /api/v1/chat/stream` → `text/event-stream`
 - `POST /api/v1/ingest` → `202 IngestResult` (+ `Location`) — ingest from a remote URL
-- `POST /api/v1/ingest/upload` → `202 IngestResult` (+ `Location`) — ingest an uploaded local PDF (`multipart/form-data`)
+- `POST /api/v1/ingest/upload` → `202 IngestResult` (+ `Location`) — ingest an uploaded local document (PDF/TXT/MD/DOCX/HTML, `multipart/form-data`)
 - `GET /api/v1/ingest/status/{doc_id}` → `IngestResult`
 - `GET /api/v1/ingest/docs?limit&cursor` → `DocsListResponse`
 - `DELETE /api/v1/ingest/{doc_id}` → `DeleteResponse`
 - `GET /api/v1/review/pending?limit&cursor` → `PendingListResponse`
 - `POST /api/v1/review/{entry_id}/approve` → `ReviewDecision` (embeds into synthesized store)
 - `POST /api/v1/review/{entry_id}/reject` → `ReviewDecision` (discards)
+- `POST /api/v1/feedback` → `201 FeedbackResponse` — open submission of 👍/👎 (#3)
+- `GET /api/v1/feedback?rating&limit&cursor` → `FeedbackListResponse` (API-key gated)
 
 **System:** `GET /health` (cached), `GET /ready` (live, 200/503), `GET /`.
 **Legacy:** `/api/*` mirrors the above with the old envelope; responses carry
@@ -262,16 +306,21 @@ centralized in `config.LEARNING_MODES`.
 
 ## 12. Testing
 
-- **Framework:** pytest + pytest-cov. **Status:** 223 tests, ~97% line coverage, hermetic
+- **Framework:** pytest + pytest-cov. **Status:** 300+ tests, ~97% line coverage, hermetic
   (fakeredis + mocked DNS/boundaries; no live Redis or network required). The RAGAS eval
   harness (`eval/`) is intentionally excluded — it needs an LLM judge and is non-deterministic.
 - **Layers:** unit (nodes, adapters, security, schemas, language detection —
   `test_lang_detect.py`, guardrails — `test_guardrails.py`, learning review —
-  `test_review.py`), API/contract (`test_api_v1.py`,
-  problem+json, deprecation, OpenAPI), streaming (`test_streaming.py`), async ingest +
-  pagination (`test_async_ingest.py`), and an **end-to-end graph integration test**
-  (`test_graph_integration.py`) that drives the real `get_llm` path (regression guard for
-  the original signature-mismatch crash).
+  `test_review.py`, resilience — `test_resilience.py`, query rewrite — `test_condense.py`,
+  groundedness — `test_verify.py`, persona — `test_persona.py`, feedback —
+  `test_feedback.py`, durable ingest — `test_ingest_queue.py`, hybrid retrieval —
+  `test_hybrid_retrieval.py`), API/contract (`test_api_v1.py`, problem+json, deprecation,
+  OpenAPI), streaming (`test_streaming.py`), async ingest + pagination
+  (`test_async_ingest.py`), and an **end-to-end graph integration test**
+  (`test_graph_integration.py`).
+- **Retrieval regression (#19):** `test_retrieval_regression.py` (marked
+  `@pytest.mark.retrieval`) seeds a tiny labeled corpus with the **real FastEmbed** model
+  and asserts recall@k + a score floor; skips cleanly when the model can't be fetched.
 - **Web:** `tsc -b` typecheck + `vite build`; `bun audit` clean.
 
 ---
@@ -285,12 +334,18 @@ GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
    gate.
 4. **docker** — build + smoke test.
 
+A separate **non-PR** workflow (`.github/workflows/eval.yml`, `workflow_dispatch` + weekly
+`schedule`) seeds a corpus (`eval/seed_corpus.py`), runs the RAGAS harness, uploads the
+report, and applies metric floors — keeping the PR pipeline hermetic and cost-free (#19).
+
 ---
 
 ## 14. Deployment
 
-- **Docker Compose:** `docker-compose.yml` (api + redis), `.local`/`.test` variants.
-- **Process:** `uvicorn main:app --host 0.0.0.0 --port 8000 --workers N`.
+- **Docker Compose:** `docker-compose.yml` (api + **ingest worker** + redis, with
+  `INGEST_MODE=queue` and a shared `ingest_incoming` volume), `.local`/`.test` variants.
+- **Process:** `uvicorn main:app --host 0.0.0.0 --port 8000 --workers N`; durable ingestion
+  adds a `python -m ingest.worker` process (one or more) consuming the Redis queue.
 - **Web client:** build `web/` and serve `dist/` statically; configure `CORS_ORIGINS` or
   reverse-proxy `/api`.
 - **SSE behind proxies:** endpoint sets `Cache-Control: no-cache` and
@@ -332,8 +387,26 @@ GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
 - **RAGAS eval is offline, not CI-gated:** it judges answers with an LLM (key, network,
   non-deterministic), which is incompatible with the hermetic CI. It ships as a standalone
   harness with a golden set for manual/scheduled regression checks.
-- **BackgroundTasks for async ingest:** simple, in-process; a Celery/RQ worker is the
-  durability/scale upgrade path.
+- **Ingestion durability is opt-in (`INGEST_MODE`):** `inline` `BackgroundTasks` stays the
+  zero-ops default for small/single-process deployments; `queue` adds a Redis-list job + a
+  worker process for crash-safety, retries, and idempotency on the value-critical KB path —
+  reusing the existing Redis status + content-hash dedup rather than a new broker (#4).
+- **Query rewriting before retrieval (#1):** generation was already context-aware while
+  retrieval searched the raw last message; condensing the follow-up first fixes multi-turn
+  recall (and false strict refusals) for one cheap, first-turn-skipped, flag-gated LLM call.
+- **Groundedness gate, heuristic-first (#2):** a dependency-free overlap heuristic is the
+  default (no extra call); an LLM judge is opt-in. Strict mode converts an `unsupported`
+  answer into the existing refusal so a high-similarity-but-hallucinated answer can't ship
+  under a confident badge.
+- **Resilience wraps only synchronous calls + the stream pre-roll (#14):** mid-stream
+  failures can't be safely replayed, so only the initial connection is retried; the circuit
+  breaker counts transient failures only, so logic errors don't trip it.
+- **Persona defaults are byte-identical (#5):** prompts stay config-free and pure; persona
+  values are injected by `generate_answer`, with defaults reproducing the original strings
+  so existing prompt assertions and behavior are unchanged.
+- **Hybrid/rerank are scaffolding, default off (Phase 4):** `RETRIEVAL_STRATEGY` keeps `mmr`
+  the default; hybrid (BM25 + RRF) and the rerank hook are adopted only once the regression
+  test / eval prove a lift — the value of #19 is the honest go/no-go.
 - **Rate limiter fails open:** prioritizes availability; pair with alerting on Redis loss.
 
 ---
@@ -361,8 +434,18 @@ GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
   default (0.5) are not yet configurable; extreme `top_k` or unusual corpora may want
   tuning. Score↔chunk join relies on `chunk_hash` (falls back to content) — a citation
   shows `score: null` if a selected chunk isn't in the scored candidate pool.
-- **In-process async ingest** — uses FastAPI `BackgroundTasks` (single process, not
-  durable across restarts); move to a worker/broker (Celery/RQ) for durability and scale.
+- **Async ingest is in-process by default** — `INGEST_MODE=inline` uses FastAPI
+  `BackgroundTasks` (not durable across restarts). `INGEST_MODE=queue` adds the durable
+  Redis-queue worker; enable it (and run the worker) for production-grade ingestion.
+- **Groundedness heuristic is lexical.** Content-word overlap can mis-judge heavy paraphrase
+  (false `unsupported`) or shared-vocabulary hallucinations (false `supported`); tune
+  `GROUNDEDNESS_MIN_SCORE` per corpus or use the `llm` tier. The strict refusal on the
+  streaming path corrects the stored answer/meta, not tokens already streamed.
+- **Hybrid retrieval / reranking are unproven on your corpus** and off by default; the
+  `rerank` hook is an identity passthrough until a concrete reranker is wired in. Validate a
+  lift via the regression test / RAGAS before enabling `RETRIEVAL_STRATEGY=hybrid*`.
+- **Feedback submission is open** (rate-limited only). Add a TTL/size cap if abuse is a
+  concern; stored reasons are guardrail-sanitized but not authenticated to a user.
 - **Auto language detection is statistical for unaccented input.** Very short, unaccented
   single tokens are inherently ambiguous between EN and PT; `auto` is high-accuracy, not
   guaranteed. Use an explicit `lang` for determinism. Adding a language requires extending

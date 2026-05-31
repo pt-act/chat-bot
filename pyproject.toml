@@ -14,3 +14,6 @@ testpaths = ["tests"]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+markers = [
+    "retrieval: hermetic retrieval-regression test using the real FastEmbed model (#19). Deselect with -m 'not retrieval'.",
+]

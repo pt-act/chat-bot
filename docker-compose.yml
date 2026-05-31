@@ -6,12 +6,37 @@ services:
     env_file: .env
     environment:
       - REDIS_HOST=redis
+      # Durable, retryable ingestion (#4): the API enqueues jobs; the worker processes them.
+      - INGEST_MODE=queue
+      - INGEST_INCOMING_DIR=/app/ingest_incoming
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - ./chroma_db:/app/chroma_db
       - ./logs:/app/logs
+      - ingest_incoming:/app/ingest_incoming
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Durable ingest worker — consumes the Redis queue so ingestion survives API restarts.
+  # Shares the Chroma store and the staged-upload volume with the API (same image).
+  worker:
+    build: .
+    command: python -m ingest.worker
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+      - INGEST_MODE=queue
+      - INGEST_INCOMING_DIR=/app/ingest_incoming
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./logs:/app/logs
+      - ingest_incoming:/app/ingest_incoming
     networks:
       - app-network
     restart: unless-stopped
@@ -35,6 +60,7 @@ services:
 
 volumes:
   redis_data:
+  ingest_incoming:
 
 networks:
   app-network:

@@ -16,8 +16,8 @@
 
 `chat-bot` is a **citations-grounded, multi-mode, bilingual RAG knowledge assistant**:
 
-- **Grounded:** answers come from ingested policy PDFs; every answer ships structured
-  citations (`label`, `doc_id`, `score`, `page`, `snippet`).
+- **Grounded:** answers come from ingested documents (PDF/TXT/MD/DOCX/HTML); every answer
+  ships structured citations (`label`, `doc_id`, `score`, `page`, `snippet`).
 - **Multi-mode (per request):** `strict` (answer only from docs, else refuse), `open`
   (docs + general knowledge), `learning` (synthesize + self-ingest).
 - **Bilingual:** auto EN/AR detection, or forced `lang`.

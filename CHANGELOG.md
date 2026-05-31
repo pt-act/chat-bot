@@ -6,6 +6,133 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [2.4.0] — 2026-05-31
+
+Quality, trust, and reliability release implementing the top-5 proposals plus four
+honorable mentions from `docs/audit/improvement-proposals.md` (see
+`docs/audit/implementation-plan.md`). Every behavior change lands behind a `config.Settings`
+flag whose **default preserves today's behavior**; new capabilities are additive and the
+API contract is backward compatible. The LangGraph pipeline grows from 6 to 8 nodes
+(adds `condense_query` and `verify_answer`); both the graph and the streaming path are kept
+in sync.
+
+### Added
+
+#### Context-aware query rewriting (#1)
+
+- **New `condense_query` node** (`graph/nodes/condense_query.py`, `prompts/condense.py`)
+  rewrites a follow-up into a self-contained search query using the rolling summary +
+  recent turns, so multi-turn retrieval is no longer context-blind (a turn like
+  "and what about damaged ones?" now retrieves the right chunk instead of falsely
+  refusing in strict mode). Retrieval searches on `state["search_query"]`; **generation
+  still uses the original question**, so display and citations are unaffected.
+- Skipped on the first turn (no LLM call), capped at 64 output tokens, and gated by
+  `QUERY_REWRITE_ENABLED` (default on). Wired into `graph/builder.py` and
+  `services/chat_service.stream_conversation`.
+
+#### Groundedness / faithfulness verification (#2)
+
+- **New `verify_answer` node** (`graph/nodes/verify_answer.py`, `prompts/verify.py`) runs
+  after generation when documents are present, computing a `grounded` verdict
+  (`supported` | `partial` | `unsupported`) and `grounded_score`. Two config-selectable
+  tiers: `heuristic` (default, no extra LLM call — content-word overlap per answer
+  sentence) and `llm` (a single JSON-judge call).
+- **Strict-mode enforcement** — an `unsupported` answer in strict mode is converted to the
+  canonical "Not in the knowledge base" refusal and its sources cleared
+  (`STRICT_REFUSE_ON_UNGROUNDED`), turning a subtle hallucination into an honest refusal.
+  In `open`/`learning` the answer is kept and only the signal is surfaced.
+- New `ChatMeta.grounded` / `grounded_score` (`schemas/responses.py`); surfaced in both the
+  `POST /api/v1/chat` response and the streaming `done` meta.
+
+#### Persistent feedback + closed quality loop (#3)
+
+- **`POST /api/v1/feedback`** (open to end users) records 👍/👎 with an optional reason and
+  Q/A snapshot; **`GET /api/v1/feedback`** (API-key gated) lists/paginates/filters it.
+  New `schemas/feedback.py`, `feedback/keys.py`, `services/feedback_service.py`,
+  `controllers/v1/feedback.py`, OpenAPI tag `feedback`. Stored reasons run through the
+  output guardrail; the turn's `correlation_id` is captured automatically.
+- **`export_downvoted_to_golden()`** appends thumbs-down questions to `eval/golden.jsonl`,
+  closing the loop from production feedback into the RAGAS regression set.
+
+#### Provider retry/backoff + circuit breaker (#14)
+
+- **New `utils/resilience.py`** — `resilient_invoke` / `@resilient_call` wrap synchronous
+  LLM calls (`generate_answer`, `summarize`, `condense_query`, `verify_answer`) with
+  tenacity exponential-backoff retries on **transient** errors (timeouts, connection
+  errors, HTTP 429/5xx) plus an in-process `CircuitBreaker` (opens after
+  `CB_FAILURE_THRESHOLD` consecutive failures, half-opens after `CB_RESET_SECONDS`).
+  Non-transient errors are never retried. Streaming retries only the **initial connection**
+  (pre-roll), before any token is yielded.
+- New dependency **`tenacity`**.
+
+#### Durable, retryable ingestion (#4)
+
+- **`INGEST_MODE=queue`** — controllers enqueue an ingest job onto a Redis list
+  (`ingest/queue.py`) consumed by a worker (`python -m ingest.worker`), so ingestion
+  survives API restarts, retries transient failures up to `INGEST_MAX_ATTEMPTS`, and stays
+  idempotent via a per-`doc_id` lock on top of the existing content-hash dedup. Uploads are
+  staged to a shared `INGEST_INCOMING_DIR`. `docker-compose.yml` gains a `worker` service +
+  shared volume. The `inline` default (FastAPI `BackgroundTasks`) is unchanged.
+
+#### Configurable persona, refusal copy & domain scoping (#5)
+
+- `ASSISTANT_NAME`, `KNOWLEDGE_DOMAIN`, `ESCALATION_MESSAGE` thread through the strict/open/
+  learning prompt builders (`prompts/answer.py` stays config-free; `generate_answer` reads
+  settings). **Defaults reproduce the original prompt strings byte-for-byte**, so an
+  unconfigured deployment behaves identically — but three env vars now rebrand the assistant
+  and its refusal/escalation copy with zero code edits.
+
+#### Hybrid retrieval + reranking (Phase 4, gated)
+
+- **`RETRIEVAL_STRATEGY`** = `mmr` (default, unchanged) | `hybrid` | `hybrid_rerank`.
+  `ingest/retrieval.py` adds BM25 lexical retrieval fused with dense results via Reciprocal
+  Rank Fusion (recovers acronyms/SKUs/exact phrases dense embeddings miss) and a `rerank`
+  integration point (identity passthrough by default — no new heavy dependency forced).
+  New dependency **`rank-bm25`**. Adopt only with evidence from the regression test/eval.
+
+#### Hermetic retrieval-regression test + opt-in eval CI (#19)
+
+- **`tests/test_retrieval_regression.py`** (marked `@pytest.mark.retrieval`) seeds a tiny
+  labeled corpus with the real FastEmbed model and asserts recall@k + a score floor, so
+  retrieval quality cannot silently regress (skips cleanly when offline).
+- **`.github/workflows/eval.yml`** — a non-PR workflow (`workflow_dispatch` + weekly
+  `schedule`) seeds a corpus (`eval/seed_corpus.py`), runs `eval/run_ragas.py`, uploads the
+  report, and applies conservative metric floors. The PR pipeline stays hermetic.
+
+#### Reviewer UI (#29)
+
+- The reference web client (`web/`) gains a **Review** panel for the `learning_review`
+  queue: list pending synthesized answers and Approve/Reject them, with an operator
+  API-key field (stored in `localStorage`, sent as `X-API-Key`). Builds clean
+  (`tsc -b && vite build`), `bun audit` clean.
+
+### Changed
+
+- **App version** → `2.4.0`.
+- **LangGraph pipeline** is now 8 nodes: `load_memory → condense_query → retrieve_context →
+  generate_answer → verify_answer → self_ingest → summarize → store_memory`.
+- **`graph/state.py`** — added `search_query`, `grounded`, `grounded_score`.
+- **`retrieve_context`** searches on `search_query` (falling back to `question`) and
+  dispatches the retrieval strategy; default MMR behavior is unchanged.
+
+### Dependencies
+
+- Added **`tenacity`** (resilience, #14) and **`rank-bm25`** (hybrid retrieval, Phase 4).
+
+### Known limitations (at 2.4.0)
+
+- **Groundedness heuristic is lexical** (content-word overlap) — tune `GROUNDEDNESS_MIN_SCORE`
+  per corpus, or switch to the `llm` tier for harder paraphrase. Strict refusal applies to
+  the *stored* answer/meta on the streaming path, not to tokens already streamed.
+- **Hybrid/rerank are off by default and unproven on your corpus** — validate a lift with
+  the regression test / RAGAS before enabling; the reranker is an identity passthrough until
+  a concrete reranker is wired in.
+- **Queue-mode ingestion adds an operational component** (worker + shared volume); `inline`
+  remains the zero-ops default.
+- **Feedback submission is open** (rate-limited only) — add a TTL/size cap if abuse is a concern.
+
+---
+
 ## [2.3.0] — 2026-05-31
 
 Closes three roadmap items — **Guardrails**, **RAGAS evaluation**, and a **learning-mode

@@ -26,6 +26,14 @@ class ChatMeta(BaseModel):
     mode: str = Field(examples=["strict"])
     lang: str | None = Field(default=None, examples=["en"])
     self_ingested: bool = False
+    grounded: str | None = Field(
+        default=None,
+        description="Groundedness verdict vs. retrieved chunks: supported | partial | unsupported (#2).",
+        examples=["supported"],
+    )
+    grounded_score: float | None = Field(
+        default=None, ge=0, le=1, description="Fraction of answer sentences supported by the context.", examples=[0.83]
+    )
     correlation_id: str | None = None
     model: str | None = Field(default=None, examples=["gpt-4o-mini"])
     usage: TokenUsage | None = None

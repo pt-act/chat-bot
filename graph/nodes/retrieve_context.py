@@ -69,7 +69,10 @@ def _score_key(doc) -> str:
 
 
 def retrieve_context(state):
-    question = state["question"]
+    # Search on the condensed, self-contained query when available (#1); fall back to the
+    # raw question. Generation still uses state["question"], so display/citations are
+    # unaffected by query rewriting.
+    question = state.get("search_query") or state["question"]
     settings = get_settings()
     threshold = state.get("score_threshold")
     if threshold is None:
@@ -106,10 +109,23 @@ def retrieve_context(state):
         logger.info("Open/learning mode: providing %d low-score docs (best=%.3f)", len(docs), best_score)
         return {"docs": context, "sources": sources, "best_score": best_score}
 
-    # Step 2 — above threshold: MMR for diverse, non-redundant chunks (quality over a few
-    # ms of extra compute). Per-citation scores come from the candidate pool scored above.
-    results = vs.max_marginal_relevance_search(question, k=top_k, fetch_k=fetch_k)
+    # Step 2 — above threshold: select diverse, non-redundant chunks. Default `mmr`
+    # (unchanged). `hybrid`/`hybrid_rerank` fuse dense + BM25 lexical recall (Phase 4),
+    # gated by retrieval_strategy. Per-citation scores come from the candidate pool above.
+    results = _select_documents(vs, question, top_k, fetch_k, getattr(settings, "retrieval_strategy", "mmr"))
     context = "\n\n".join(d.page_content for d in results)
     sources = _dedup([_to_source(d, score_map.get(_score_key(d))) for d in results])
-    logger.info("Retrieved %d chunks via MMR (best=%.3f, fetch_k=%d)", len(results), best_score, fetch_k)
+    logger.info("Retrieved %d chunks (best=%.3f, fetch_k=%d)", len(results), best_score, fetch_k)
     return {"docs": context, "sources": sources, "best_score": best_score}
+
+
+def _select_documents(vs, question: str, top_k: int, fetch_k: int, strategy: str) -> list:
+    """Dispatch to the configured retrieval strategy (default MMR — behavior-preserving)."""
+    if strategy in ("hybrid", "hybrid_rerank"):
+        from ingest.retrieval import hybrid_retrieve, rerank
+
+        results = hybrid_retrieve(vs, question, k=top_k, fetch_k=fetch_k)
+        if strategy == "hybrid_rerank":
+            results = rerank(question, results, top_k)
+        return results
+    return vs.max_marginal_relevance_search(question, k=top_k, fetch_k=fetch_k)

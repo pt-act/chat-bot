@@ -48,6 +48,11 @@ class VectorStoreRepository:
     def get_by_doc_id(self, doc_id: str) -> dict:
         return self._vs._collection.get(where={"doc_id": doc_id})
 
+    def all_chunks(self) -> dict:
+        """Return every chunk (ids, documents, metadatas) — used to build the BM25 index
+        for hybrid retrieval (see ingest.retrieval)."""
+        return self._vs._collection.get(include=["documents", "metadatas"])
+
     def delete_by_ids(self, ids: list[str]) -> None:
         if ids:
             self._vs._collection.delete(ids=ids)

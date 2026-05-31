@@ -1,4 +1,4 @@
-"""Tests for local PDF upload ingestion (POST /api/v1/ingest/upload) and process_uploaded."""
+"""Tests for local document upload ingestion (POST /api/v1/ingest/upload) and process_uploaded."""
 
 import os
 import tempfile

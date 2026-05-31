@@ -1,0 +1,92 @@
+name: RAGAS Eval (opt-in)
+
+# Deliberately NOT part of the PR pipeline: RAGAS judges answers with an LLM (needs a key,
+# network, and is non-deterministic). Run it on demand or on a schedule so the hermetic CI
+# in ci.yml stays fast and cost-free. See eval/README.md and docs/audit/implementation-plan.md (#19).
+on:
+  workflow_dispatch:
+    inputs:
+      generate_mode:
+        description: "Chat mode used to generate answers"
+        default: "open"
+        type: choice
+        options: [open, strict, learning]
+  schedule:
+    # Weekly, Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
+
+jobs:
+  ragas:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      LLM_MODEL: gpt-4o-mini
+      EMBEDDING_PROVIDER: fastembed
+      EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
+      CHROMA_PERSIST_DIR: ./chroma_db
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-eval.txt
+
+      - name: Seed evaluation corpus
+        run: python eval/seed_corpus.py
+
+      - name: Run RAGAS evaluation
+        run: |
+          python eval/run_ragas.py \
+            --mode live \
+            --generate-mode "${{ github.event.inputs.generate_mode || 'open' }}" \
+            --output eval/report.json
+
+      - name: Upload RAGAS report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragas-report
+          path: eval/report.json
+
+      - name: Enforce metric floors (optional gate)
+        run: |
+          python - <<'PY'
+          import json, sys
+          from pathlib import Path
+          report = Path("eval/report.json")
+          if not report.exists():
+              print("No report produced; skipping floor check.")
+              sys.exit(0)
+          scores = json.loads(report.read_text()).get("scores", {})
+          # Conservative floors — tune as the golden set grows. Missing metrics are skipped.
+          floors = {"faithfulness": 0.6, "answer_relevancy": 0.6}
+          failures = [f"{m}={scores[m]:.3f} < {floor}" for m, floor in floors.items()
+                      if isinstance(scores.get(m), (int, float)) and scores[m] < floor]
+          if failures:
+              print("RAGAS below floor:", "; ".join(failures))
+              sys.exit(1)
+          print("RAGAS metrics within floors:", scores)
+          PY

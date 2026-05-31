@@ -24,3 +24,7 @@ audit_artifacts/
 .venv/
 venv/
 env/
+
+# Durable-ingestion staged uploads (INGEST_INCOMING_DIR) + eval output
+ingest_incoming/
+eval/report.json

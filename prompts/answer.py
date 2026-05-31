@@ -1,24 +1,57 @@
+"""Prompt builders for the three answer modes.
+
+This module is deliberately **pure** — it imports no config and reads no environment.
+Persona/branding values (`assistant_name`, `knowledge_domain`, `escalation_message`)
+are passed in by the caller (see graph.nodes.generate_answer.build_chat_prompt, which
+reads them from config). Defaults reproduce the project's original hard-coded strings
+so out-of-the-box behavior — and existing prompt assertions — are unchanged.
+"""
+
+# Defaults below intentionally reproduce the previous hard-coded copy byte-for-byte.
+_DEFAULT_ASSISTANT_NAME = "our company"
+_DEFAULT_ESCALATION = "Please contact support."
+
+
+def _domain_clause(knowledge_domain: str) -> str:
+    """Optional domain-framing sentence appended to the persona line (empty → nothing)."""
+    kd = (knowledge_domain or "").strip()
+    return f" You answer questions about {kd}." if kd else ""
+
+
 def build_answer_prompt(
-    summary: str, history: str, docs: str, question: str, lang: str, chat_mode: str = "strict"
+    summary: str,
+    history: str,
+    docs: str,
+    question: str,
+    lang: str,
+    chat_mode: str = "strict",
+    assistant_name: str = _DEFAULT_ASSISTANT_NAME,
+    knowledge_domain: str = "",
+    escalation_message: str = _DEFAULT_ESCALATION,
 ) -> str:
     context_block = docs.strip()
     has_context = bool(context_block)
+    persona = {
+        "assistant_name": assistant_name or _DEFAULT_ASSISTANT_NAME,
+        "knowledge_domain": knowledge_domain or "",
+        "escalation_message": escalation_message or _DEFAULT_ESCALATION,
+    }
 
     if chat_mode == "strict":
-        return _build_strict_prompt(summary, history, context_block, question, lang, has_context)
+        return _build_strict_prompt(summary, history, context_block, question, lang, has_context, persona)
     elif chat_mode == "open":
-        return _build_open_prompt(summary, history, context_block, question, lang, has_context)
+        return _build_open_prompt(summary, history, context_block, question, lang, has_context, persona)
     elif chat_mode in ("learning", "learning_review"):
         # learning_review uses the same synthesis prompt as learning — the only difference
         # is downstream: its answer is queued for review rather than embedded immediately.
-        return _build_learning_prompt(summary, history, context_block, question, lang, has_context)
-    return _build_strict_prompt(summary, history, context_block, question, lang, has_context)
+        return _build_learning_prompt(summary, history, context_block, question, lang, has_context, persona)
+    return _build_strict_prompt(summary, history, context_block, question, lang, has_context, persona)
 
 
 def _build_strict_prompt(
-    summary: str, history: str, context_block: str, question: str, lang: str, has_context: bool
+    summary: str, history: str, context_block: str, question: str, lang: str, has_context: bool, persona: dict
 ) -> str:
-    return f"""You are a helpful assistant for our company.
+    return f"""You are a helpful assistant for {persona["assistant_name"]}.{_domain_clause(persona["knowledge_domain"])}
 
 Conversation Summary:
 {summary}
@@ -39,7 +72,7 @@ Rules:
   what they said. Do NOT use general knowledge about unrelated topics.
 - If Relevant Context is "(no relevant documents found)" AND the user is asking about a new topic
   not covered in the conversation — reply ONLY with:
-  "I don't have information about that in our knowledge base. Please contact support."
+  "I don't have information about that in our knowledge base. {persona["escalation_message"]}"
 - Otherwise, answer ONLY from the Relevant Context. Do not add outside knowledge.
 - Be concise (2-3 sentences max).
 - Do not repeat history.
@@ -50,9 +83,9 @@ Rules:
 
 
 def _build_open_prompt(
-    summary: str, history: str, context_block: str, question: str, lang: str, has_context: bool
+    summary: str, history: str, context_block: str, question: str, lang: str, has_context: bool, persona: dict
 ) -> str:
-    return f"""You are a helpful assistant for our company.
+    return f"""You are a helpful assistant for {persona["assistant_name"]}.{_domain_clause(persona["knowledge_domain"])}
 
 Conversation Summary:
 {summary}
@@ -79,9 +112,13 @@ Rules:
 
 
 def _build_learning_prompt(
-    summary: str, history: str, context_block: str, question: str, lang: str, has_context: bool
+    summary: str, history: str, context_block: str, question: str, lang: str, has_context: bool, persona: dict
 ) -> str:
-    return f"""You are a helpful assistant for our company that learns from conversations.
+    header = (
+        f"You are a helpful assistant for {persona['assistant_name']} that learns from "
+        f"conversations.{_domain_clause(persona['knowledge_domain'])}"
+    )
+    return f"""{header}
 
 Conversation Summary:
 {summary}

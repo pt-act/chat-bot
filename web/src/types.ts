@@ -32,3 +32,29 @@ export interface ChatMessage {
   streaming?: boolean;
   error?: boolean;
 }
+
+// --- Reviewer queue (operator panel) ---
+
+/** A pending entry awaiting moderator approval in the learning_review queue. */
+export interface PendingReview {
+  entry_id: string;
+  question: string;
+  answer: string;
+  best_score?: number | null;
+  created_at: string;
+  status: string;
+}
+
+/** GET /api/v1/review/pending response. */
+export interface PendingListResponse {
+  total: number;
+  pending: PendingReview[];
+  next_cursor?: number | null;
+}
+
+/** POST /api/v1/review/{id}/approve|reject response. */
+export interface ReviewDecision {
+  entry_id: string;
+  status: "approved" | "rejected";
+  embedded: boolean;
+}

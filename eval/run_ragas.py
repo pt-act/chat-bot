@@ -10,7 +10,7 @@ Two modes:
   live   (default) — for each question in the dataset, run the real retrieval +
                      generation path to produce an answer and its retrieved contexts,
                      then score with RAGAS. Requires a populated Chroma collection
-                     (ingest your policy PDFs first) and configured LLM/embeddings.
+                     (ingest your policy documents first) and configured LLM/embeddings.
 
   score            — skip generation; read precomputed records
                      ({question, answer, contexts[], ground_truth}) from --answers

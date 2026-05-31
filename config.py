@@ -50,9 +50,36 @@ class Settings(BaseSettings):
     # Chunks below this score are discarded — if none pass, the bot replies with
     # "I don't have information about that" instead of hallucinating from weak matches.
     retrieval_score_threshold: float = 0.3
+    # Retrieval strategy for above-threshold lookups. `mmr` (default) preserves today's
+    # behavior; `hybrid` fuses dense + BM25 lexical via RRF; `hybrid_rerank` adds a reranker.
+    retrieval_strategy: str = "mmr"  # mmr | hybrid | hybrid_rerank
+
+    # Context-aware query rewriting (#1) — condense follow-ups into a standalone search
+    # query using the rolling summary + recent turns before retrieval. First turn skips it.
+    query_rewrite_enabled: bool = True
+
+    # Groundedness / faithfulness verification (#2) — check the answer is supported by the
+    # retrieved chunks and surface meta.grounded; strict mode can refuse when unsupported.
+    groundedness_enabled: bool = True
+    groundedness_mode: str = "heuristic"  # heuristic (no LLM call) | llm (JSON judge)
+    groundedness_min_score: float = 0.5  # fraction of answer sentences that must be supported
+    strict_refuse_on_ungrounded: bool = True
 
     chat_mode: str = "strict"  # strict | open | learning | learning_review
     self_ingest_min_length: int = 50
+
+    # Provider resilience (#14) — retry transient LLM/embedding failures + circuit breaker.
+    provider_max_retries: int = 3
+    provider_retry_base_delay: float = 0.5  # seconds; exponential backoff base
+    circuit_breaker_enabled: bool = True
+    cb_failure_threshold: int = 5  # consecutive failures before the circuit opens
+    cb_reset_seconds: int = 30  # cool-down before a half-open trial call
+
+    # Persona / branding (#5) — de-hardcode the assistant's identity, domain framing, and
+    # refusal/escalation copy. Defaults reproduce the previous hard-coded prompt strings.
+    assistant_name: str = "our company"
+    knowledge_domain: str = ""  # e.g. "returns & shipping policy" — empty adds no framing
+    escalation_message: str = "Please contact support."
 
     # Guardrails (lightweight, dependency-free; see guardrails/)
     guardrails_enabled: bool = True
@@ -67,6 +94,13 @@ class Settings(BaseSettings):
     # Ingest
     max_file_size_mb: int = 50
     download_timeout_seconds: int = 30
+    # Durable ingestion (#4). `inline` (default) keeps the FastAPI BackgroundTasks path;
+    # `queue` enqueues jobs onto a Redis list consumed by `python -m ingest.worker`,
+    # surviving restarts and retrying transient failures up to ingest_max_attempts.
+    ingest_mode: str = "inline"  # inline | queue
+    ingest_max_attempts: int = 3
+    # Shared directory uploads are written to in queue mode so the worker can read them.
+    ingest_incoming_dir: str = "./ingest_incoming"
 
     # App
     debug: bool = False

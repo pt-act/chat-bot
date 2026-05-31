@@ -29,10 +29,11 @@ _UPLOAD_READ_CHUNK = 1024 * 1024  # 1 MiB
     response_model_exclude_none=True,
     status_code=202,
     dependencies=[Depends(require_api_key)],
-    summary="Queue a policy PDF for ingestion",
+    summary="Queue a document for ingestion (from a URL)",
     description=(
-        "Accepts the document and processes it in the background. Returns 202 with "
-        "`status=queued`; poll `GET /ingest/status/{doc_id}` for progress."
+        "Fetches the document from `s3_url` and processes it in the background. Supported "
+        "formats: PDF, TXT, Markdown, DOCX, HTML (inferred from the URL extension). Returns "
+        "202 with `status=queued`; poll `GET /ingest/status/{doc_id}` for progress."
     ),
 )
 def ingest(request: IngestRequest, background: BackgroundTasks, response: Response) -> IngestResult:
@@ -43,14 +44,31 @@ def ingest(request: IngestRequest, background: BackgroundTasks, response: Respon
     redis.hset(ingest_status_key(doc_id), mapping={"doc_id": doc_id, "status": "queued", "file_name": doc_id})
     redis.sadd(ALL_DOCS_KEY, doc_id)
 
-    background.add_task(ingest_file, request.file_name, str(request.s3_url))
+    settings = get_settings()
+    if settings.ingest_mode == "queue":
+        # Durable path (#4): a worker process picks the job up, surviving API restarts.
+        from ingest.queue import enqueue
+
+        enqueue(
+            {
+                "kind": "url",
+                "file_name": request.file_name,
+                "s3_url": str(request.s3_url),
+                "ext": detect_extension(str(request.s3_url)),
+            }
+        )
+    else:
+        background.add_task(ingest_file, request.file_name, str(request.s3_url))
     response.headers["Location"] = f"/api/v1/ingest/status/{doc_id}"
-    logger.info("Queued ingest for %s", doc_id)
+    logger.info("Queued ingest for %s (mode=%s)", doc_id, settings.ingest_mode)
     return IngestResult(doc_id=doc_id, status="queued")
 
 
-def _save_upload_to_temp(file: UploadFile, ext: str, max_bytes: int) -> str:
+def _save_upload_to_temp(file: UploadFile, ext: str, max_bytes: int, dest_dir: str | None = None) -> str:
     """Stream an upload to a temp file, enforcing the size cap (and a PDF magic check).
+
+    ``dest_dir`` stages the file in a shared directory (queue mode, so the worker can read
+    it); ``None`` uses the system temp dir (inline mode).
 
     Returns the temp path (caller/background task owns removal). Raises HTTPException
     (413 too large / 415 empty or not a PDF) and cleans up the temp file on rejection.
@@ -60,7 +78,7 @@ def _save_upload_to_temp(file: UploadFile, ext: str, max_bytes: int) -> str:
     `failed` ingest status if the content is malformed.
     """
     src = file.file  # underlying SpooledTemporaryFile
-    tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+    tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False, dir=dest_dir)
     size = 0
     first = True
     try:
@@ -125,15 +143,27 @@ def ingest_upload(
         doc_id = sanitize_doc_id(file.filename or "")
 
     settings = get_settings()
-    file_path = _save_upload_to_temp(file, ext, settings.max_file_size_mb * 1024 * 1024)
+    max_bytes = settings.max_file_size_mb * 1024 * 1024
+    queue_mode = settings.ingest_mode == "queue"
+    if queue_mode:
+        # Stage to a shared dir so the durable worker (a separate process) can read it (#4).
+        os.makedirs(settings.ingest_incoming_dir, exist_ok=True)
+        file_path = _save_upload_to_temp(file, ext, max_bytes, dest_dir=settings.ingest_incoming_dir)
+    else:
+        file_path = _save_upload_to_temp(file, ext, max_bytes)
 
     redis = get_redis()
     redis.hset(ingest_status_key(doc_id), mapping={"doc_id": doc_id, "status": "queued", "file_name": doc_id})
     redis.sadd(ALL_DOCS_KEY, doc_id)
 
-    background.add_task(ingest_local_file, doc_id, file_path, ext)
+    if queue_mode:
+        from ingest.queue import enqueue
+
+        enqueue({"kind": "upload", "file_name": doc_id, "file_path": file_path, "ext": ext})
+    else:
+        background.add_task(ingest_local_file, doc_id, file_path, ext)
     response.headers["Location"] = f"/api/v1/ingest/status/{doc_id}"
-    logger.info("Queued uploaded ingest for %s (%s)", doc_id, ext)
+    logger.info("Queued uploaded ingest for %s (%s, mode=%s)", doc_id, ext, settings.ingest_mode)
     return IngestResult(doc_id=doc_id, status="queued")
 
 

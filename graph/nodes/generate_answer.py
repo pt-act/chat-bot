@@ -3,10 +3,12 @@ from functools import lru_cache
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from config import get_settings
 from guardrails import sanitize_output
 from prompts.answer import build_answer_prompt
 from utils.lang_detect import detect_language
 from utils.llm_adapter import get_llm
+from utils.resilience import resilient_invoke
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,9 @@ def build_chat_prompt(state) -> tuple[str, str]:
     recent = messages[-6:]
     history = "\n".join(f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in recent)
 
+    # Persona/branding is config-driven (#5). Defaults reproduce the original copy, so
+    # an unconfigured deployment emits byte-identical prompts.
+    settings = get_settings()
     prompt = build_answer_prompt(
         summary=summary,
         history=history,
@@ -48,6 +53,9 @@ def build_chat_prompt(state) -> tuple[str, str]:
         question=question,
         lang=lang,
         chat_mode=chat_mode,
+        assistant_name=settings.assistant_name,
+        knowledge_domain=settings.knowledge_domain,
+        escalation_message=settings.escalation_message,
     )
     return prompt, lang
 
@@ -59,7 +67,7 @@ def generate_answer(state):
 
     prompt, lang = build_chat_prompt(state)
 
-    response = _get_chat().invoke(prompt)
+    response = resilient_invoke(_get_chat().invoke, prompt)
     answer, _flags = sanitize_output(response.content)
     logger.info("Generated answer for user %s (lang=%s, mode=%s)", state.get("user_id"), lang, chat_mode)
 

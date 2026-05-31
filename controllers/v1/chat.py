@@ -59,6 +59,8 @@ def chat(request: ChatRequest, x_user_id: str = Header(default="anonymous")) -> 
             mode=(request.mode or settings.chat_mode).lower(),
             lang=result.get("lang"),
             self_ingested=result.get("self_ingested", False),
+            grounded=result.get("grounded"),
+            grounded_score=result.get("grounded_score"),
             correlation_id=correlation_id_var.get() or None,
             model=settings.llm_model,
         ),

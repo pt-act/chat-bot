@@ -26,13 +26,28 @@ bun run typecheck
 - **Streaming chat** — `POST /api/v1/chat/stream` parsed as Server-Sent Events
   (`token` → `sources` → `done`); Stop aborts the request mid-stream.
 - **Controls** — per-request `mode` (strict/open/learning/learning_review) and `lang` (auto/en/ar/pt).
-- **Upload PDF** — pick a local PDF and `POST /api/v1/ingest/upload` (multipart); the file
-  goes straight from the browser, no hosting/URL required.
+- **Upload doc** — pick a local file (PDF/TXT/MD/DOCX/HTML) and `POST /api/v1/ingest/upload`
+  (multipart); the file goes straight from the browser, no hosting/URL required.
 - **Citations** — collapsible Sources with label, page, relevance score, and snippet.
 - **RTL** — Arabic messages render `dir="rtl"` via logical CSS properties.
 - **A11y** — `aria-live` on the streaming answer, keyboard send (Enter) / Shift+Enter
   newline, visible focus rings, `prefers-reduced-motion`.
 - **Health** — polls `/health` and shows a status dot.
+- **Reviewer queue (operators)** — the header **Review** toggle (or the `#/review` hash
+  route) opens an operator panel over the `learning_review` queue. It lists pending entries
+  (`question`, `answer`, `best_score`, `created_at`) from `GET /api/v1/review/pending` with
+  **Approve** (`POST /api/v1/review/{id}/approve` — embeds the answer into the knowledge
+  base) and **Reject** (`POST /api/v1/review/{id}/reject` — discards it). Resolved entries
+  are removed optimistically; `next_cursor` drives a **Load more** affordance.
+
+### Operator API key
+
+The review endpoints (and ingest/upload) are gated by `require_api_key` when the server
+runs with `REQUIRE_AUTH_FOR_INGEST=true`. The Review panel has an **API key** field; the
+value is stored in `localStorage` (`chatbot.apiKey`) and sent as the `X-API-Key` header on
+review and upload requests. It is a privileged operator action — only meaningful when the
+server requires auth, and the key never leaves the browser except as that header. This
+panel is intended for operators/moderators.
 
 Conversation memory is scoped by a stable per-browser `X-User-Id` (localStorage).
 
