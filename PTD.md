@@ -287,6 +287,10 @@ centralized in `config.LEARNING_MODES`.
   `ALLOWED_HOSTS` is an explicit allowlist; `*` allows public hosts only.
 - **Ingest auth:** `X-API-Key` dependency — `DELETE` always; others when
   `REQUIRE_AUTH_FOR_INGEST=true`.
+- **Ingest path guard:** `_validate_ingest_path` (in `ingest/policies.py`) resolves symlinks
+  and confines every file the pipeline opens (hashing + loaders) to the system temp dir or
+  `INGEST_INCOMING_DIR`. Defense-in-depth against path-traversal / file-inclusion — relevant
+  for queue mode, where `file_path` is carried in a Redis job.
 - **Memory safety:** `X-User-Id` validated (`[A-Za-z0-9_.@-]{1,128}`) and namespaced
   (`chat:memory:`) so it cannot collide with operational keys.
 - **Rate limiting:** per-IP sliding window in Redis, proxy-aware (`TRUSTED_PROXIES`),

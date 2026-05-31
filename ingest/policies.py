@@ -19,6 +19,28 @@ from utils.security import SSRFError, validate_download_url
 logger = logging.getLogger(__name__)
 
 
+def _validate_ingest_path(file_path: str) -> str:
+    """Guard the file path before it is opened for hashing/loading (defense-in-depth
+    against path-traversal / file-inclusion).
+
+    Ingest paths are always **server-created** temp/staged files (URL downloads land in the
+    system temp dir; uploads land there or in ``INGEST_INCOMING_DIR``). This resolves
+    symlinks and rejects anything that is not a regular file inside one of those allowed
+    base directories — notably a crafted ``file_path`` arriving on the durable ingest queue.
+    Returns the resolved real path. Raises ``ValueError`` (→ the job is marked ``failed``).
+    """
+    real = os.path.realpath(file_path)
+    if not os.path.isfile(real):
+        raise ValueError(f"ingest path is not a regular file: {file_path!r}")
+    allowed = (
+        os.path.realpath(tempfile.gettempdir()),
+        os.path.realpath(get_settings().ingest_incoming_dir),
+    )
+    if not any(real == base or real.startswith(base + os.sep) for base in allowed):
+        raise ValueError(f"ingest path is outside the allowed directories: {file_path!r}")
+    return real
+
+
 def _file_hash(file_path: str) -> str:
     h = hashlib.sha256()
     with open(file_path, "rb") as f:
@@ -194,6 +216,9 @@ def _run_ingest(redis_client, doc_id: str, file_name: str, file_path: str, ext: 
     Shared by both the URL (`process_policy`) and upload (`process_uploaded`) paths.
     ``ext`` selects the document loader (see ingest.loaders).
     """
+    # Sanitize the path before any file read (hash + loader). Both downstream open() calls
+    # operate only on a validated, server-owned temp/staged file.
+    file_path = _validate_ingest_path(file_path)
     new_file_hash = _file_hash(file_path)
     stored_file_hash = redis_client.hget(ingest_status_key(doc_id), "file_hash")
 

@@ -128,6 +128,11 @@ in sync.
 - **Container hardening** — the Docker image now runs as a non-root `appuser` (least
   privilege); runtime dirs (`logs`, `chroma_db`, `ingest_incoming`) are pre-created and
   owned by it so queue-mode uploads stay writable.
+- **Ingest path guard** — `_validate_ingest_path` resolves symlinks and confines every
+  file opened by the ingest pipeline (hashing + loaders) to the system temp dir or
+  `INGEST_INCOMING_DIR`, before any read. Production paths are always server-created temp
+  files; this is defense-in-depth against path-traversal / file-inclusion, notably a
+  crafted `file_path` arriving on the durable ingest queue.
 - **Residual:** `chromadb 1.5.9` **CVE-2026-45829** (pre-auth RCE in *server* mode) still
   has no upstream-fixed release; mitigated by embedded (non-server) use and excluded in CI
   pip-audit. The ingest downloader's SSRF surface remains guarded by `validate_download_url`
