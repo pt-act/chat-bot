@@ -79,10 +79,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.window_seconds = window_seconds
         self._trusted_proxies = get_settings().trusted_proxies
 
+    def _headers(self, remaining: int, reset_epoch: int) -> dict[str, str]:
+        return {
+            "X-RateLimit-Limit": str(self.max_requests),
+            "X-RateLimit-Remaining": str(max(0, remaining)),
+            "X-RateLimit-Reset": str(reset_epoch),
+        }
+
     async def dispatch(self, request: Request, call_next):
         ip = _get_client_ip(request, self._trusted_proxies)
-        window = int(time.time()) // self.window_seconds  # current time window
+        now = int(time.time())
+        window = now // self.window_seconds  # current time window
         key = f"rate_limit:{ip}:{window}"
+        reset_epoch = (window + 1) * self.window_seconds  # when the window rolls over
 
         try:
             redis = get_redis()
@@ -94,16 +103,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 redis.expire(key, self.window_seconds + 1)
 
             if count > self.max_requests:
+                retry_after = max(1, reset_epoch - now)
                 logger.warning("Rate limit exceeded for IP %s (%d requests)", ip, count)
+                headers = self._headers(0, reset_epoch)
+                headers["Retry-After"] = str(retry_after)
                 return JSONResponse(
                     status_code=429,
+                    media_type="application/problem+json",
+                    headers=headers,
                     content={
-                        "error": "Too many requests",
+                        "type": "https://errors.chat-bot/rate-limit",
+                        "title": "Too many requests",
+                        "status": 429,
                         "detail": (
                             f"Limit is {self.max_requests} requests per {self.window_seconds}s. Try again shortly."
                         ),
                     },
                 )
+
+            response = await call_next(request)
+            for k, v in self._headers(self.max_requests - count, reset_epoch).items():
+                response.headers[k] = v
+            return response
         except Exception:
             # If Redis is unavailable, fail open to avoid blocking all traffic
             logger.warning("Rate limiting unavailable (Redis error), allowing request from %s", ip)

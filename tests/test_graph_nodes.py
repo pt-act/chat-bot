@@ -68,23 +68,32 @@ class TestRetrieveContext:
 
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
-    def test_above_threshold_returns_context(self, mock_settings, mock_get_vs):
+    def test_above_threshold_returns_structured_sources(self, mock_settings, mock_get_vs):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
         vs = MagicMock()
-        vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.8)]
-        doc1 = MagicMock()
-        doc1.page_content = "chunk one"
-        doc1.metadata = {"source": "policy.pdf"}
-        doc2 = MagicMock()
-        doc2.page_content = "chunk two"
-        doc2.metadata = {"source": "policy.pdf"}
-        vs.max_marginal_relevance_search.return_value = [doc1, doc2]
+        doc1 = MagicMock(
+            page_content="chunk one", metadata={"doc_id": "policy", "source_file": "policy.pdf", "page_number": 1}
+        )
+        doc2 = MagicMock(
+            page_content="chunk two", metadata={"doc_id": "policy", "source_file": "policy.pdf", "page_number": 2}
+        )
+        # The scored top-k drives both context and citation scores (MMR no longer used).
+        vs.similarity_search_with_relevance_scores.return_value = [(doc1, 0.8), (doc2, 0.7)]
         mock_get_vs.return_value = vs
 
         result = retrieve_context({"question": "test", "chat_mode": "strict"})
         assert result["docs"] == "chunk one\n\nchunk two"
-        assert result["sources"] == ["policy.pdf"]
         assert result["best_score"] == 0.8
+        # Structured citations with score/page/snippet (distinct pages → not deduped).
+        labels = [s["label"] for s in result["sources"]]
+        assert labels == ["policy.pdf", "policy.pdf"]
+        assert result["sources"][0] == {
+            "label": "policy.pdf",
+            "doc_id": "policy",
+            "score": 0.8,
+            "page": 1,
+            "snippet": "chunk one",
+        }
 
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
@@ -111,7 +120,8 @@ class TestRetrieveContext:
 
         result = retrieve_context({"question": "test", "chat_mode": "open"})
         assert result["docs"] == "weak match"
-        assert result["sources"] == ["doc.pdf"]
+        assert result["sources"][0]["label"] == "doc.pdf"
+        assert result["sources"][0]["score"] is None  # weak path has no per-doc score
         assert result["best_score"] == 0.2
 
     @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")

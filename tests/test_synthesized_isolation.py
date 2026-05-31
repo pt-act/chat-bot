@@ -51,7 +51,7 @@ class TestRetrievalIsolation:
 
         result = retrieve_context({"question": "q", "chat_mode": "learning"})
         assert "previously synthesized" in result["docs"]
-        assert "synthesized:abc" in result["sources"]
+        assert any(s["doc_id"] == "synthesized:abc" for s in result["sources"])
         synth.similarity_search.assert_called_once()
 
     @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")

@@ -36,7 +36,9 @@ def chat_controller(
     try:
         result = conversation(user_id=user_id, q=request.q)
         logger.info("Chat response generated for user %s", user_id)
-        return {"status": "success", "data": result["answer"], "sources": result["sources"]}
+        # Legacy contract: sources are bare label strings (v1 returns structured objects).
+        sources = [s.get("label", "unknown") if isinstance(s, dict) else s for s in result["sources"]]
+        return {"status": "success", "data": result["answer"], "sources": sources}
     except ValueError as e:
         # 4xx validation feedback is safe to surface to the caller.
         logger.warning("Chat validation error for user %s: %s", user_id, e)
