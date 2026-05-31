@@ -3,14 +3,14 @@
 Technical reference for engineers and operators. For consumer usage see
 [`user_guidelines.md`](user_guidelines.md); for setup see [`README.md`](README.md).
 
-**Version:** API 2.1.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-05-30
+**Version:** API 2.3.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-05-31
 
 ---
 
 ## 1. Purpose & scope
 
-`chat-bot` is a Retrieval-Augmented Generation (RAG) chatbot service. It ingests PDF
-policy documents into a vector store, answers questions grounded in those documents
+`chat-bot` is a Retrieval-Augmented Generation (RAG) chatbot service. It ingests documents
+(PDF, TXT, Markdown, DOCX, HTML) into a vector store, answers questions grounded in those documents
 (with selectable strictness), keeps per-user conversation memory, and exposes a versioned
 HTTP API plus a reference web client.
 
@@ -22,6 +22,11 @@ audit's fixes (the `get_llm` generation-params crash, SSRF redirect+DNS hardenin
 information-leak, memory-key namespacing, synthesized-collection isolation, and CI/test
 repairs). Retrieval continues to use the **score gate + MMR** design from v1.0.0 — MMR was
 never dropped; citation scores are obtained alongside it (see §6, §15).
+
+**v2.2.0** adds **European Portuguese (pt-PT)** as a third response language (alongside
+English and Arabic) via a hybrid auto-detector (`utils/lang_detect.py`) — a fast,
+dependency-free heuristic with a lingua statistical fallback for short ambiguous inputs
+(see §6, §15). Additive and backward compatible: `lang` still defaults to `auto`.
 
 ---
 
@@ -60,7 +65,10 @@ never dropped; citation scores are obtained alongside it (see §6, §15).
   DeepSeek, Fireworks, Mistral, vLLM, LM Studio, llama.cpp), Anthropic, Google Gemini —
   via `utils/llm_adapter`.
 - **Embeddings:** OpenAI, FastEmbed, HuggingFace — via `utils/embedding_adapter`.
+- **Language detection:** in-house heuristic + [lingua](https://github.com/pemistahl/lingua-py)
+  (`lingua-language-detector`) EN/PT fallback — via `utils/lang_detect`.
 - **Vector store:** ChromaDB (embedded/persistent) via `langchain-chroma`.
+- **Document parsing:** pypdf (PDF), docx2txt (DOCX), beautifulsoup4 (HTML), stdlib (TXT/MD) — via `ingest/loaders.py`.
 - **Cache/state:** Redis (conversation memory, rate-limit counters, ingest metadata).
 - **Config:** pydantic-settings (`config.py`).
 - **Web client:** Vite + React + TypeScript (`web/`).
@@ -78,9 +86,13 @@ never dropped; citation scores are obtained alongside it (see §6, §15).
 | Controllers (legacy) | `controllers/{chat,ingest}_controller.py` | Backward-compatible unversioned endpoints. |
 | Services | `services/{chat,ingest}_service.py` | Orchestrate the graph / ingest pipeline; `stream_conversation`. |
 | Graph | `graph/builder.py`, `graph/state.py`, `graph/nodes/*` | RAG pipeline nodes & wiring. |
-| Ingest | `ingest/policies.py`, `ingest/keys.py` | Download→chunk→embed→upsert; Redis key constants. |
+| Ingest | `ingest/policies.py`, `ingest/loaders.py`, `ingest/keys.py` | URL download **or** local upload → shared `_run_ingest` (load→chunk→embed→upsert); multi-format loader registry (PDF/TXT/MD/DOCX/HTML); Redis key constants. |
 | DB | `db/redis_client.py`, `db/vector.py` | Redis client + `memory_key`; Chroma accessors + `VectorStoreRepository`. |
 | Adapters | `utils/llm_adapter.py`, `utils/embedding_adapter.py` | Provider selection. |
+| Language detection | `utils/lang_detect.py` | Resolve response language (EN/AR/PT): script + heuristic, lingua fallback. |
+| Guardrails | `guardrails/{input_guard,output_guard,exceptions}.py` | Input prompt-injection blocking; output PII masking + length cap. Dependency-free, toggleable. |
+| Review (learning) | `services/review_service.py`, `review/keys.py`, `controllers/v1/review.py` | Two-phase ingest: queue → approve(embed)/reject for synthesized answers. |
+| Evaluation | `eval/run_ragas.py`, `eval/golden.jsonl` | Offline RAGAS harness (not in CI). |
 | Security | `utils/security.py`, `middlewares/auth.py` | SSRF guard (DNS-aware); API-key dependency. |
 | Middleware | `middlewares/{observability,rate_limiter,errors,logging_setup}.py` | Correlation id, timing, rate limiting + headers, problem+json, logging. |
 | Schemas | `schemas/{chat,ingest,responses}.py` | Request validation + typed responses + problem model. |
@@ -105,11 +117,16 @@ the LLM answer token-by-token (`get_llm(...).stream(prompt)` via the shared
 stream so memory persists even though the client saw tokens first. Emits SSE
 `token`/`sources`/`done` (and `error` on failure, with no internal text).
 
-### Async ingest (`POST /api/v1/ingest`)
-Writes an initial `queued` status to Redis, schedules `ingest_file` via FastAPI
-`BackgroundTasks`, returns `202` + `Location`. `process_policy` downloads (SSRF-guarded,
-no redirects), hashes, chunks (`RecursiveCharacterTextSplitter`), embeds, diffs against
-prior chunk hashes, upserts changed chunks, and records `done`/`failed` status.
+### Async ingest (`POST /api/v1/ingest`, `POST /api/v1/ingest/upload`)
+Writes an initial `queued` status to Redis, schedules a background task via FastAPI
+`BackgroundTasks`, returns `202` + `Location`. **URL path:** `process_policy` downloads
+(SSRF-guarded, no redirects) to a temp file. **Upload path:** the controller validates the
+extension (PDF also gets a `%PDF` magic check), streams the `multipart` file to a temp file
+(`MAX_FILE_SIZE_MB` cap), then `process_uploaded` runs. Both pass the detected extension to
+the shared `_run_ingest`, which loads the file via the format registry
+(`ingest.loaders.load_documents` — PDF/TXT/MD/DOCX/HTML), then hashes, chunks
+(`RecursiveCharacterTextSplitter`), embeds, diffs against prior chunk hashes, upserts
+changed chunks, records `done`/`failed`, and removes the temp file.
 
 ---
 
@@ -122,13 +139,42 @@ sources, chat_mode, best_score, last_answer, self_ingested, lang, top_k, score_t
 |------|-------|--------|-------|
 | `load_memory` | `user_id` | `messages`, `summary` | Reads `chat:memory:{user_id}` from Redis. |
 | `retrieve_context` | `question`, `chat_mode`, `top_k`, `score_threshold` | `docs`, `sources`, `best_score` | Relevance gate (strict blocks below threshold) → **MMR** for diverse selection above threshold; learning also queries the synthesized store. Returns structured citations with scores joined from the scored candidate pool. |
-| `generate_answer` | `summary`, `messages`, `docs`, `question`, `lang`, `chat_mode` | `messages`, `last_answer`, `lang` | Resolves language (auto/en/ar); calls the LLM. |
-| `self_ingest` | `chat_mode`, `best_score`, `last_answer` | `self_ingested` | Learning-only; writes synthesized answers to the **separate** collection. |
+| `generate_answer` | `summary`, `messages`, `docs`, `question`, `lang`, `chat_mode` | `messages`, `last_answer`, `lang` | Resolves language via `utils.lang_detect` — explicit `en`/`ar`/`pt` bypass detection, `auto` runs the hybrid detector (script → heuristic → lingua); calls the LLM. |
+| `self_ingest` | `chat_mode`, `best_score`, `last_answer` | `self_ingested`, `pending_review`, `review_entry_id` | Learning modes only. `learning` embeds into the **separate** synthesized collection; `learning_review` **queues** the answer in Redis for review (no embedding). |
 | `summarize` | `messages` | `summary`, `messages` | Summarizes when ≥4 messages; truncates to last 6. |
 | `store_memory` | `messages`, `summary`, `user_id` | — | Persists to Redis with TTL. |
 
 Edges are linear: `START → load_memory → retrieve_context → generate_answer →
 self_ingest → summarize → store_memory → END`.
+
+**Language resolution (`utils/lang_detect.detect_language`).** Supported labels:
+`English`, `Arabic`, `European Portuguese`. Explicit `lang` (`en`/`ar`/`pt`) maps directly
+via `_LANG_LABELS`; `auto` runs a three-tier hybrid:
+1. **Arabic** — Unicode script match (instant, definitive).
+2. **Portuguese heuristic** (no dependency) — distinctive diacritics
+   (`ã õ á é í ó ú â ê ô à ç`) are decisive; otherwise a Portuguese stopword-frequency
+   ratio (>0.5 of tokens, NLTK `portuguese` list) decides for sentences of ≥4 words. A
+   single shared token (e.g. English "no", also a PT stopword) cannot flip the verdict.
+3. **lingua fallback** — only for short, unaccented, ambiguous fragments. The EN/PT
+   detector is built once (`lru_cache`); on any error it defaults to English so a request
+   never fails on detection. The resolved label is injected into the prompt and surfaced
+   in `meta.lang`.
+
+**Guardrails (`guardrails/`).** Two deterministic, dependency-free layers, toggleable via
+settings. *Input* (`check_input`, run in `chat_service` before the graph) rejects
+prompt-injection / jailbreak phrasings, raising `GuardrailViolation` (a `ValueError`) →
+HTTP 400 / problem+json (sync) or a 400 `error` SSE frame before any token is streamed.
+*Output* (`sanitize_output`, in `generate_answer` and on the assembled streaming answer)
+optionally masks PII and enforces a length cap. PII masking on the stream applies to the
+stored/persisted answer, not tokens already emitted.
+
+**Learning review (`learning_review` mode, two-phase ingest).** The `learning_review` chat
+mode behaves like `learning` but `self_ingest` writes the synthesized answer to a Redis
+pending queue (`services/review_service.py`) instead of embedding it — unverified content
+never reaches the vector store until approved. A moderator drives `/api/v1/review/*`;
+**approve** embeds the entry into `synthesized_answers` (then retrievable in the learning
+modes), **reject** discards it. Plain `learning` embeds immediately. Mode membership is
+centralized in `config.LEARNING_MODES`.
 
 ---
 
@@ -139,6 +185,8 @@ self_ingest → summarize → store_memory → END`.
 - `rate_limit:{ip}:{window}` → counter (TTL = window + 1s).
 - `ingest_status:{doc_id}` (hash), `doc_chunks:{doc_id}` (set of chunk hashes),
   `ingest:doc_ids` (set), `ingest:content_hashes` (hash) — centralized in `ingest/keys.py`.
+- `review:pending:{entry_id}` (hash: question, answer, best_score, created_at, status),
+  `review:pending_ids` (set) — learning-review queue, centralized in `review/keys.py`.
 
 **ChromaDB collections** (same persist dir, different names)
 - `policies` (configurable) — authoritative ingested chunks. Metadata: `doc_id`,
@@ -157,7 +205,8 @@ self_ingest → summarize → store_memory → END`.
 | `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | openai / text-embedding-3-small | Embedding backend. |
 | `REDIS_HOST/PORT/PASSWORD` / `REDIS_TTL_SECONDS` | localhost/6379/""/86400 | Redis + memory TTL. |
 | `CHROMA_PERSIST_DIR` / `CHROMA_COLLECTION` / `SYNTHESIZED_COLLECTION` | ./chroma_db / policies / synthesized_answers | Vector store. |
-| `CHAT_MODE` / `RETRIEVAL_SCORE_THRESHOLD` / `SELF_INGEST_MIN_LENGTH` | strict / 0.3 / 50 | RAG behavior. |
+| `CHAT_MODE` / `RETRIEVAL_SCORE_THRESHOLD` / `SELF_INGEST_MIN_LENGTH` | strict / 0.3 / 50 | RAG behavior. `CHAT_MODE` ∈ `strict`/`open`/`learning`/`learning_review` (the last queues synthesized answers for review). |
+| `GUARDRAILS_ENABLED` / `GUARDRAILS_BLOCK_INJECTION` / `GUARDRAILS_MASK_PII` / `GUARDRAILS_MAX_ANSWER_CHARS` | true / true / false / 4000 | Input injection blocking; output PII masking + length cap. |
 | `MAX_FILE_SIZE_MB` / `DOWNLOAD_TIMEOUT_SECONDS` | 50 / 30 | Ingest limits. |
 | `API_KEY` / `REQUIRE_AUTH_FOR_INGEST` | "" / false | Ingest auth. |
 | `CORS_ORIGINS` / `ALLOWED_HOSTS` / `TRUSTED_PROXIES` | [] / ["*"] / [] | CORS, SSRF allowlist, proxy-aware rate limiting. |
@@ -170,10 +219,14 @@ self_ingest → summarize → store_memory → END`.
 **v1 (typed envelopes, problem+json errors)**
 - `POST /api/v1/chat` → `ChatResponse`
 - `POST /api/v1/chat/stream` → `text/event-stream`
-- `POST /api/v1/ingest` → `202 IngestResult` (+ `Location`)
+- `POST /api/v1/ingest` → `202 IngestResult` (+ `Location`) — ingest from a remote URL
+- `POST /api/v1/ingest/upload` → `202 IngestResult` (+ `Location`) — ingest an uploaded local PDF (`multipart/form-data`)
 - `GET /api/v1/ingest/status/{doc_id}` → `IngestResult`
 - `GET /api/v1/ingest/docs?limit&cursor` → `DocsListResponse`
 - `DELETE /api/v1/ingest/{doc_id}` → `DeleteResponse`
+- `GET /api/v1/review/pending?limit&cursor` → `PendingListResponse`
+- `POST /api/v1/review/{entry_id}/approve` → `ReviewDecision` (embeds into synthesized store)
+- `POST /api/v1/review/{entry_id}/reject` → `ReviewDecision` (discards)
 
 **System:** `GET /health` (cached), `GET /ready` (live, 200/503), `GET /`.
 **Legacy:** `/api/*` mirrors the above with the old envelope; responses carry
@@ -209,9 +262,12 @@ self_ingest → summarize → store_memory → END`.
 
 ## 12. Testing
 
-- **Framework:** pytest + pytest-cov. **Status:** 178 tests, ~97% line coverage, hermetic
-  (fakeredis + mocked DNS/boundaries; no live Redis or network required).
-- **Layers:** unit (nodes, adapters, security, schemas), API/contract (`test_api_v1.py`,
+- **Framework:** pytest + pytest-cov. **Status:** 223 tests, ~97% line coverage, hermetic
+  (fakeredis + mocked DNS/boundaries; no live Redis or network required). The RAGAS eval
+  harness (`eval/`) is intentionally excluded — it needs an LLM judge and is non-deterministic.
+- **Layers:** unit (nodes, adapters, security, schemas, language detection —
+  `test_lang_detect.py`, guardrails — `test_guardrails.py`, learning review —
+  `test_review.py`), API/contract (`test_api_v1.py`,
   problem+json, deprecation, OpenAPI), streaming (`test_streaming.py`), async ingest +
   pagination (`test_async_ingest.py`), and an **end-to-end graph integration test**
   (`test_graph_integration.py`) that drives the real `get_llm` path (regression guard for
@@ -256,8 +312,26 @@ GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
   come from scoring the candidate pool once and joining by `chunk_hash`. An earlier change
   had replaced MMR with scored top-k to get scores; that was an unforced quality regression
   and has been reverted.
+- **Hybrid language detection (heuristic first, lingua only when needed):** the fast,
+  dependency-free heuristic resolves the overwhelming majority of inputs at negligible cost;
+  the heavier statistical model is consulted only for short, unaccented, ambiguous fragments
+  where the heuristic abstains. This balances latency against accuracy and keeps an explicit
+  `lang` selector 100% reliable. Restricting lingua to EN/PT keeps it fast and prevents it
+  guessing an unsupported language.
 - **Synthesized isolation:** separate collection prevents model-generated content from
   surfacing as authoritative.
+- **Two-phase learning ingest (review before embed):** model-synthesized answers are
+  queued for human approval rather than embedded immediately, so unverified content cannot
+  enter the vector store (and thus retrieval) without a human in the loop. The queue is
+  Redis-only — embedding happens at approval — which keeps the synthesized collection clean
+  and avoids embedding work for entries that get rejected.
+- **Guardrails are lightweight, deterministic, and toggleable:** dependency-free heuristics
+  (no model calls) keep the suite hermetic and latency negligible; tuned for precision over
+  recall. They are a defense layer, not a complete solution. PII masking defaults off because
+  a support assistant often legitimately returns contact emails.
+- **RAGAS eval is offline, not CI-gated:** it judges answers with an LLM (key, network,
+  non-deterministic), which is incompatible with the hermetic CI. It ships as a standalone
+  harness with a golden set for manual/scheduled regression checks.
 - **BackgroundTasks for async ingest:** simple, in-process; a Celery/RQ worker is the
   durability/scale upgrade path.
 - **Rate limiter fails open:** prioritizes availability; pair with alerting on Redis loss.
@@ -289,7 +363,16 @@ GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
   shows `score: null` if a selected chunk isn't in the scored candidate pool.
 - **In-process async ingest** — uses FastAPI `BackgroundTasks` (single process, not
   durable across restarts); move to a worker/broker (Celery/RQ) for durability and scale.
+- **Auto language detection is statistical for unaccented input.** Very short, unaccented
+  single tokens are inherently ambiguous between EN and PT; `auto` is high-accuracy, not
+  guaranteed. Use an explicit `lang` for determinism. Adding a language requires extending
+  `_LANG_LABELS`, the lingua language set, and the prompt guidance (currently EN/AR/PT only).
+- **Guardrails are heuristic.** Tuned for precision; novel prompt-injection phrasings may
+  slip through, and streaming PII masking applies only to the persisted answer, not tokens
+  already sent. Treat them as one layer of defense.
+- **RAGAS scores are non-deterministic and corpus/model-dependent.** Use as a regression
+  signal across changes, not an absolute grade; the harness is not run in CI.
 - **`retrieve_context` complexity** is CC 15 (radon) — a candidate for extracting the
   weak-match branch into a helper.
-- See [`README.md`](README.md) → Roadmap and [`CHANGELOG.md`](CHANGELOG.md) `[2.1.0]` →
-  Known limitations for the broader list.
+- See [`README.md`](README.md) → Roadmap and [`CHANGELOG.md`](CHANGELOG.md) `[2.2.0]`/`[2.1.0]`
+  → Known limitations for the broader list.

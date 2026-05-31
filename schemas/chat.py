@@ -6,11 +6,16 @@ from pydantic import BaseModel, Field, field_validator
 class ChatRequest(BaseModel):
     q: str
     # Per-request overrides (all optional; omitted → server defaults / auto).
-    mode: Literal["strict", "open", "learning"] | None = Field(
-        default=None, description="Override the server's default chat mode for this request."
+    mode: Literal["strict", "open", "learning", "learning_review"] | None = Field(
+        default=None,
+        description=(
+            "Override the server's default chat mode for this request. 'learning_review' "
+            "behaves like 'learning' but queues synthesized answers for human approval."
+        ),
     )
-    lang: Literal["auto", "en", "ar"] = Field(
-        default="auto", description="Force the response language, or auto-detect."
+    lang: Literal["auto", "en", "ar", "pt"] = Field(
+        default="auto",
+        description="Force the response language ('pt' = European Portuguese), or auto-detect.",
     )
     top_k: int | None = Field(default=None, ge=1, le=10, description="Number of chunks to retrieve.")
     score_threshold: float | None = Field(

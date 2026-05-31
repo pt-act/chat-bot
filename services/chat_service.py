@@ -12,6 +12,8 @@ from graph.nodes.retrieve_context import retrieve_context
 from graph.nodes.self_ingest import self_ingest
 from graph.nodes.store_memory import store_memory
 from graph.nodes.summarize import summarize
+from guardrails import check_input, sanitize_output
+from utils.lang_detect import to_code
 from utils.llm_adapter import get_llm
 
 logger = logging.getLogger(__name__)
@@ -43,16 +45,19 @@ def conversation(
 
     `mode`/`lang`/`top_k`/`score_threshold` are optional per-request overrides;
     when omitted the server defaults (config) and auto language detection apply.
+
+    Raises ``GuardrailViolation`` (a ``ValueError``) if the input guardrail rejects `q`.
     """
+    check_input(q)
     state = _initial_state(user_id, q, mode, lang, top_k, score_threshold)
     result = _graph().invoke(state)
 
-    resolved = result.get("lang")  # "English"/"Arabic" set by generate_answer
+    resolved = result.get("lang")  # resolved label set by generate_answer
     return {
         "answer": result["messages"][-1].content,
         "sources": result.get("sources", []),
         "self_ingested": result.get("self_ingested", False),
-        "lang": "ar" if resolved == "Arabic" else "en",
+        "lang": to_code(resolved),
     }
 
 
@@ -72,7 +77,11 @@ def stream_conversation(
 
     Events: ``token`` {delta}, ``sources`` {sources}, ``done`` {meta}. Errors are
     surfaced by the caller as an ``error`` event.
+
+    Raises ``GuardrailViolation`` (a ``ValueError``) before any token is streamed if
+    the input guardrail rejects `q`; the caller maps it to an ``error`` event.
     """
+    check_input(q)
     state = _initial_state(user_id, q, mode, lang, top_k, score_threshold)
     state.update(load_memory(state))
     state.update(retrieve_context(state))
@@ -85,7 +94,10 @@ def stream_conversation(
         if delta:
             parts.append(delta)
             yield "token", {"delta": delta}
-    answer = "".join(parts)
+    # Output guardrail runs on the assembled answer used for memory/self-ingest. Note:
+    # tokens are emitted raw as they arrive, so PII masking cannot retroactively redact
+    # already-streamed text — it applies to the stored/persisted answer.
+    answer, _flags = sanitize_output("".join(parts))
 
     # Reconstruct the state generate_answer would have produced, then run post-steps.
     state["messages"] = (state.get("messages") or []) + [HumanMessage(content=q), AIMessage(content=answer)]
@@ -106,7 +118,7 @@ def stream_conversation(
         {
             "meta": {
                 "mode": state["chat_mode"],
-                "lang": "ar" if resolved_lang == "Arabic" else "en",
+                "lang": to_code(resolved_lang),
                 "self_ingested": state.get("self_ingested", False),
                 "model": get_settings().llm_model,
             }

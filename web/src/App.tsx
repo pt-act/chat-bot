@@ -3,6 +3,7 @@ import { Composer } from "./components/Composer";
 import { Controls } from "./components/Controls";
 import { HealthBadge } from "./components/HealthBadge";
 import { MessageList } from "./components/MessageList";
+import { UploadButton } from "./components/UploadButton";
 import { streamChat } from "./lib/api";
 import type { ChatMessage, Lang, Mode, Source } from "./types";
 
@@ -86,6 +87,7 @@ export function App() {
         <h1 className="title">Chatbot</h1>
         <div className="header-right">
           <Controls mode={mode} lang={lang} disabled={busy} onMode={setMode} onLang={setLang} />
+          <UploadButton userId={userId()} disabled={busy} />
           <HealthBadge />
         </div>
       </header>

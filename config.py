@@ -6,6 +6,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
+# Supported chat modes. `learning_review` behaves like `learning` (synthesizes answers to
+# fill knowledge gaps) but queues them for human approval instead of embedding them
+# immediately — see graph.nodes.self_ingest and services.review_service.
+CHAT_MODES = ("strict", "open", "learning", "learning_review")
+# Modes that synthesize gap-filling answers and may grow the knowledge base.
+LEARNING_MODES = ("learning", "learning_review")
+
 
 class Settings(BaseSettings):
     # Pydantic automatically matches ex:- OPENAI_API_KEY become openai_api_key
@@ -44,8 +51,18 @@ class Settings(BaseSettings):
     # "I don't have information about that" instead of hallucinating from weak matches.
     retrieval_score_threshold: float = 0.3
 
-    chat_mode: str = "strict"  # strict | open | learning
+    chat_mode: str = "strict"  # strict | open | learning | learning_review
     self_ingest_min_length: int = 50
+
+    # Guardrails (lightweight, dependency-free; see guardrails/)
+    guardrails_enabled: bool = True
+    # Reject inputs that look like prompt-injection / jailbreak attempts (→ 400).
+    guardrails_block_injection: bool = True
+    # Mask PII (emails, phone numbers, credit-card-like digits) in model output.
+    # Off by default: a support bot often legitimately returns contact emails.
+    guardrails_mask_pii: bool = False
+    # Hard cap on answer length (characters); 0 disables the cap.
+    guardrails_max_answer_chars: int = 4000
 
     # Ingest
     max_file_size_mb: int = 50
@@ -79,8 +96,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def check_chat_mode(self):
         mode = self.chat_mode.lower()
-        if mode not in {"strict", "open", "learning"}:
-            raise ValueError(f"CHAT_MODE must be 'strict', 'open', or 'learning' — got '{mode}'")
+        if mode not in set(CHAT_MODES):
+            allowed = ", ".join(f"'{m}'" for m in CHAT_MODES)
+            raise ValueError(f"CHAT_MODE must be one of {allowed} — got '{mode}'")
         return self
 
     @model_validator(mode="after")

@@ -88,6 +88,13 @@ class TestPerRequestControls:
         resp = _client().post("/api/v1/chat", json={"q": "hi", "mode": "bogus"})
         assert resp.status_code == 422
 
+    @patch("controllers.v1.chat.conversation")
+    def test_learning_review_mode_accepted(self, mock_conv):
+        mock_conv.return_value = {"answer": "a", "sources": [], "self_ingested": True, "lang": "en"}
+        resp = _client().post("/api/v1/chat", json={"q": "hi", "mode": "learning_review"})
+        assert resp.status_code == 200
+        assert resp.json()["meta"]["mode"] == "learning_review"
+
     def test_top_k_out_of_range_rejected(self):
         resp = _client().post("/api/v1/chat", json={"q": "hi", "top_k": 99})
         assert resp.status_code == 422

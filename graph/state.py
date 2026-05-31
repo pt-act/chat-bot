@@ -13,6 +13,8 @@ class State(TypedDict, total=False):
     best_score: float
     last_answer: str
     self_ingested: bool
+    pending_review: bool  # learning mode: answer queued for review instead of embedded
+    review_entry_id: str  # id of the queued pending-review entry, when applicable
     # Per-request overrides (optional; fall back to server defaults)
     lang: str  # input: "auto"|"en"|"ar"; after generate: resolved label "English"/"Arabic"
     top_k: int

@@ -6,6 +6,152 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [2.3.0] — 2026-05-31
+
+Closes three roadmap items — **Guardrails**, **RAGAS evaluation**, and a **learning-mode
+review workflow (two-phase ingest)** — and adds **multi-format ingestion** (PDF, TXT,
+Markdown, DOCX, HTML) with a **local upload** path so documents can be ingested without a
+public URL. Backward compatible: existing endpoints/contracts are unchanged; new behavior
+is additive.
+
+### Added
+
+#### Multi-format document ingestion + local upload
+
+- **Multi-format support** — ingestion is no longer PDF-only. A new loader registry
+  (`ingest/loaders.py`, `load_documents`) handles **PDF, TXT, Markdown (`.md`/`.markdown`),
+  DOCX, and HTML (`.html`/`.htm`)**, dispatched by extension; adding a format is a one-line
+  entry. Both URL and upload paths infer the format from the file/URL extension. URL ingest
+  now validates against all supported extensions (not just `.pdf`).
+- **`POST /api/v1/ingest/upload`** (`multipart/form-data`) — ingest a document uploaded
+  directly from the client, no URL required, so documents never have to leave the user's
+  environment (completes the fully-local story alongside FastEmbed + Ollama). Validates by
+  extension (PDFs also get a `%PDF` magic-header check), enforces `MAX_FILE_SIZE_MB` while
+  streaming to a temp file, derives a sanitized `doc_id` from the filename (or an explicit
+  `file_name`), and reuses the existing async pipeline (202 + `Location`, poll
+  `GET /ingest/status/{doc_id}`).
+- **Shared ingest core** — `ingest/policies.py` refactored into `_run_ingest` reused by both
+  `process_policy` (URL) and the new `process_uploaded` (local file), threading the format
+  through to the loader; `ingest_local_file` service + `sanitize_doc_id`/`clean_file_name`
+  helpers in `schemas/ingest.py`.
+- **Web client `Upload doc` button** (`web/`) — file picker (PDF/TXT/MD/DOCX/HTML) that
+  posts to the upload endpoint and reports queued status.
+- Dependencies: **`python-multipart`** (FastAPI form/file parsing), **`docx2txt`** (.docx),
+  **`beautifulsoup4`** (.html, via the stdlib parser).
+
+#### Guardrails (`guardrails/`)
+
+- **Lightweight, dependency-free, deterministic** input/output guards (no model calls, so
+  the suite stays hermetic). Config-toggleable via `config.Settings`.
+- **Input guard** (`check_input`) — rejects prompt-injection / jailbreak attempts
+  ("ignore previous instructions", "reveal your system prompt", "developer mode",
+  `<system>` tags, etc.). Raises `GuardrailViolation` (a `ValueError`) → HTTP 400 /
+  problem+json on `POST /chat`, and a 400 `error` SSE frame on `POST /chat/stream`.
+  Runs before any token is streamed.
+- **Output guard** (`sanitize_output`) — optional PII masking (emails, phone/card-like
+  number runs) and a hard answer-length cap; returns flags describing what was applied.
+  Applied in `generate_answer` and on the assembled streaming answer.
+- Settings: `GUARDRAILS_ENABLED` (true), `GUARDRAILS_BLOCK_INJECTION` (true),
+  `GUARDRAILS_MASK_PII` (false — a support bot often legitimately returns contact
+  emails), `GUARDRAILS_MAX_ANSWER_CHARS` (4000; 0 disables).
+
+#### Learning-mode review workflow — new `learning_review` chat mode (two-phase ingest)
+
+- **New fourth chat mode `learning_review`** alongside `strict` / `open` / `learning`
+  (`CHAT_MODES` / `LEARNING_MODES` in `config.py`; added to the `ChatRequest.mode` enum and
+  the web mode selector). It behaves like `learning` — synthesizing gap-filling answers and
+  consulting the synthesized store — but is **two-phase**: synthesized answers are **queued
+  in Redis** (`services/review_service.py`, keys in `review/keys.py`) instead of embedded.
+  Unverified model output never enters the vector store until a human approves it. Plain
+  `learning` keeps embedding immediately.
+- **New `/api/v1/review` endpoints** (`controllers/v1/review.py`, gated by the existing
+  `require_api_key` dependency): `GET /review/pending` (paginated), `POST /review/{id}/approve`
+  (embeds into `synthesized_answers`, then retrievable in the learning modes),
+  `POST /review/{id}/reject` (discards). Typed via `schemas/review.py`.
+- New state fields `pending_review` / `review_entry_id`; new OpenAPI tag `review`.
+
+#### Evaluation (RAGAS) — `eval/`
+
+- **Offline harness** (`eval/run_ragas.py`) computing faithfulness, answer relevancy,
+  context precision, and context recall. Two modes: `live` (runs the real retrieval +
+  generation path) and `score` (scores precomputed records). Golden dataset
+  (`eval/golden.jsonl`), docs (`eval/README.md`), optional deps (`requirements-eval.txt`).
+- **Deliberately not wired into CI** — RAGAS judges with an LLM (needs a key, network, and
+  is non-deterministic), which would break the hermetic suite.
+
+### Changed
+
+- **App version** → `2.3.0`.
+- **`meta.lang`** now reports `pt` for European Portuguese responses (previously collapsed
+  to `en`); mapping centralized in `utils.lang_detect.to_code`.
+
+### Dependencies
+
+- `requirements-eval.txt` (optional): `ragas>=0.1,<0.2`, `datasets>=2.16`. Not installed
+  in CI or the runtime image.
+
+### Known limitations (at 2.3.0)
+
+- **Guardrails are heuristic**, tuned for precision over recall — novel injection phrasings
+  may pass; they are a layer, not a complete defense. PII masking on streaming applies to
+  the stored/persisted answer, not tokens already streamed to the client.
+- **RAGAS scores are corpus/model-dependent and non-deterministic** — use them as a
+  regression signal, not an absolute grade.
+
+---
+
+## [2.2.0] — 2026-05-31
+
+Adds **European Portuguese (pt-PT)** as a third response language alongside English and
+Arabic. Backward compatible: `lang` defaults to `auto` and existing EN/AR behavior is
+unchanged; `pt` is purely additive across the API, pipeline, and web client.
+
+### Added
+
+- **European Portuguese responses** — `lang` now accepts `pt` (`ChatRequest`,
+  `schemas/chat.py`). When selected, prompts instruct the model to answer in the spelling
+  and vocabulary of Portugal (pt-PT), never Brazilian Portuguese (`prompts/answer.py`,
+  all three modes).
+- **Hybrid language auto-detection** (`utils/lang_detect.py`, new module exposing
+  `detect_language`):
+  - Arabic by Unicode script (unchanged, definitive).
+  - A fast, dependency-free **Portuguese heuristic** — distinctive diacritics
+    (`ã õ á é í ó ú â ê ô à ç`) are decisive; otherwise a Portuguese **stopword-frequency
+    ratio** (NLTK `portuguese` list) decides for sentences of ≥4 words. Single shared
+    tokens (e.g. the English word "no", also a PT stopword) cannot flip the verdict.
+  - Only short, unaccented, genuinely ambiguous fragments fall through to the
+    [lingua](https://github.com/pemistahl/lingua-py) EN/PT statistical model, built once
+    and `lru_cache`d. Falls back to English if the model is unavailable (never crashes a
+    request).
+- **Web client `PT` language selector** (`web/src/components/Controls.tsx`,
+  `web/src/types.ts`) — `lang` type is now `auto | en | ar | pt`. Portuguese renders LTR
+  (no RTL change needed).
+- **Tests** — new `tests/test_lang_detect.py` (10 cases: Arabic, diacritics, stopword
+  ratio, shared-stopword abstention, lingua fallback for PT and EN, library-unavailable
+  default) plus Portuguese cases in `tests/test_graph_nodes.py`.
+
+### Changed
+
+- **App version** → `2.2.0`.
+- **`generate_answer`** now delegates language resolution to `utils.lang_detect`
+  (the inline EN/AR-only heuristic was removed); explicit `en`/`ar`/`pt` still bypass
+  detection.
+
+### Dependencies
+
+- Added **`lingua-language-detector==2.1.1`** — statistical EN/PT fallback for short,
+  unaccented inputs.
+
+### Known limitations (at 2.2.0)
+
+- **Auto-detection of unaccented Portuguese vs English is statistical, not perfect.** Very
+  short single tokens are inherently ambiguous (lingua leans on n-gram models). Explicit
+  `lang: "pt"` (or `en`/`ar`) is 100% reliable; auto is high-accuracy but not guaranteed.
+- Detection currently distinguishes **EN / AR / PT** only; adding more languages means
+  extending `_LANG_LABELS`, the lingua language set, and the prompt guidance.
+
+---
+
 ## [2.1.0] — 2026-05-31
 
 API ergonomics + a reference web client, plus fixes from an independent code-quality

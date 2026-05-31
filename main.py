@@ -11,6 +11,7 @@ from controllers.chat_controller import router as legacy_chat_router
 from controllers.ingest_controller import router as legacy_ingest_router
 from controllers.v1.chat import router as v1_chat_router
 from controllers.v1.ingest import router as v1_ingest_router
+from controllers.v1.review import router as v1_review_router
 from db.redis_client import get_redis
 from db.vector import get_vectorstore
 from middlewares.errors import register_error_handlers
@@ -67,7 +68,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Chatbot API",
-    version="2.1.0",
+    version="2.3.0",
     description=(
         "RAG chatbot API. Versioned endpoints live under `/api/v1` and return typed "
         "envelopes; errors use RFC 9457 (application/problem+json). The unversioned "
@@ -77,6 +78,7 @@ app = FastAPI(
     openapi_tags=[
         {"name": "chat", "description": "Conversational RAG endpoints."},
         {"name": "ingest", "description": "Document ingestion and management."},
+        {"name": "review", "description": "Moderate learning-mode synthesized answers (two-phase ingest)."},
         {"name": "system", "description": "Health and readiness probes."},
     ],
     lifespan=lifespan,
@@ -116,6 +118,7 @@ app.add_middleware(
 # v1 (typed envelopes) + legacy (unversioned, deprecated)
 app.include_router(v1_ingest_router, prefix=_V1_PREFIX)
 app.include_router(v1_chat_router, prefix=_V1_PREFIX)
+app.include_router(v1_review_router, prefix=_V1_PREFIX)
 app.include_router(legacy_ingest_router, prefix=_LEGACY_PREFIX)
 app.include_router(legacy_chat_router, prefix=_LEGACY_PREFIX)
 

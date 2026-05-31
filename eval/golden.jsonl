@@ -1,0 +1,6 @@
+{"question": "How many days do I have to return an item?", "ground_truth": "Customers may return any item within 30 days of purchase for a full refund."}
+{"question": "How do I start a return?", "ground_truth": "Contact the support team at support@company.com with the original order number, proof of purchase, and a brief description of the reason. Returns without prior authorization are not accepted."}
+{"question": "How long do refunds take?", "ground_truth": "Refunds are processed within 5 to 7 business days after the returned item is received, and issued to the original payment method."}
+{"question": "What is the exchange window?", "ground_truth": "Items may be exchanged within 14 days of purchase, with the original receipt and subject to product availability."}
+{"question": "How long does standard shipping take?", "ground_truth": "Standard shipping takes 5 to 7 business days; orders are processed within 1 to 2 business days after payment confirmation."}
+{"question": "Will you sell my personal data?", "ground_truth": "No. Personal data is collected only to process orders and improve services and is never sold to third parties. Customers may request deletion at any time."}

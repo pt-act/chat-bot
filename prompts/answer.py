@@ -8,7 +8,9 @@ def build_answer_prompt(
         return _build_strict_prompt(summary, history, context_block, question, lang, has_context)
     elif chat_mode == "open":
         return _build_open_prompt(summary, history, context_block, question, lang, has_context)
-    elif chat_mode == "learning":
+    elif chat_mode in ("learning", "learning_review"):
+        # learning_review uses the same synthesis prompt as learning — the only difference
+        # is downstream: its answer is queued for review rather than embedded immediately.
         return _build_learning_prompt(summary, history, context_block, question, lang, has_context)
     return _build_strict_prompt(summary, history, context_block, question, lang, has_context)
 
@@ -42,7 +44,8 @@ Rules:
 - Be concise (2-3 sentences max).
 - Do not repeat history.
 - YOU MUST respond in {lang} only. No exceptions.
-  (Pure English question → English. Any Arabic characters present, even mixed → Arabic.)
+  (If {lang} is European Portuguese, use the spelling and vocabulary of Portugal — pt-PT,
+  never Brazilian Portuguese.)
 """
 
 
@@ -70,7 +73,8 @@ Rules:
 - Be concise (2-3 sentences max).
 - Do not repeat history.
 - YOU MUST respond in {lang} only. No exceptions.
-  (Pure English question → English. Any Arabic characters present, even mixed → Arabic.)
+  (If {lang} is European Portuguese, use the spelling and vocabulary of Portugal — pt-PT,
+  never Brazilian Portuguese.)
 """
 
 
@@ -100,5 +104,6 @@ Rules:
 - Be concise but informative (2-4 sentences).
 - Do not repeat history.
 - YOU MUST respond in {lang} only. No exceptions.
-  (Pure English question → English. Any Arabic characters present, even mixed → Arabic.)
+  (If {lang} is European Portuguese, use the spelling and vocabulary of Portugal — pt-PT,
+  never Brazilian Portuguese.)
 """

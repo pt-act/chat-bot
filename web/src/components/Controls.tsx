@@ -1,10 +1,16 @@
 import type { Lang, Mode } from "../types";
 
-const MODES: Mode[] = ["strict", "open", "learning"];
+const MODES: { value: Mode; label: string }[] = [
+  { value: "strict", label: "strict" },
+  { value: "open", label: "open" },
+  { value: "learning", label: "learning" },
+  { value: "learning_review", label: "learning (review)" },
+];
 const LANGS: { value: Lang; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "en", label: "EN" },
   { value: "ar", label: "ع" },
+  { value: "pt", label: "PT" },
 ];
 
 interface Props {
@@ -27,8 +33,8 @@ export function Controls({ mode, lang, disabled, onMode, onLang }: Props) {
           aria-label="Chat mode"
         >
           {MODES.map((m) => (
-            <option key={m} value={m}>
-              {m}
+            <option key={m.value} value={m.value}>
+              {m.label}
             </option>
           ))}
         </select>
