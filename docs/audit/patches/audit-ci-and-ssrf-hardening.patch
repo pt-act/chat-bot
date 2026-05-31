@@ -1,0 +1,295 @@
+diff --git a/.env b/.env
+deleted file mode 100644
+index 8c5c145..0000000
+--- a/.env
++++ /dev/null
+@@ -1,17 +0,0 @@
+-OPENAI_API_KEY=your_openai_key
+-REDIS_HOST=localhost
+-REDIS_PORT=6379
+-REDIS_PASSWORD=
+-
+-LLM_PROVIDER=openai        # openai | anthropic | groq
+-LLM_MODEL=gpt-4o-mini      # model name for the chosen provider
+-
+-EMBEDDING_PROVIDER=openai                  # openai | huggingface
+-EMBEDDING_MODEL=text-embedding-3-small
+-
+-DOWNLOAD_TIMEOUT_SECONDS=120
+-
+-LANGSMITH_TRACING=false
+-LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+-LANGSMITH_API_KEY=<api key>
+-LANGSMITH_PROJECT="AI chatbot"
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2286564..52746bd 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -63,6 +63,34 @@ jobs:
+   # ── 3. Test Suite + Coverage ──────────────────────────────────────────────────
+   test:
+     runs-on: ubuntu-latest
++
++    # Redis is available for any test that exercises the real client (memory,
++    # rate limiter, readiness). The current suite mocks Redis with fakeredis, so
++    # this is not strictly required today, but it keeps CI honest for future
++    # integration tests and matches the docker-compose runtime.
++    services:
++      redis:
++        image: redis:7-alpine
++        ports:
++          - 6379:6379
++        options: >-
++          --health-cmd "redis-cli ping"
++          --health-interval 5s
++          --health-timeout 3s
++          --health-retries 5
++
++    # Provide config the app/tests need explicitly, instead of relying on a
++    # committed .env (which is being removed from version control). A non-empty
++    # OPENAI_API_KEY satisfies config.Settings validation; fastembed avoids any
++    # outbound model calls during tests.
++    env:
++      OPENAI_API_KEY: test-key-for-ci
++      LLM_PROVIDER: openai
++      EMBEDDING_PROVIDER: fastembed
++      EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
++      REDIS_HOST: localhost
++      REDIS_PORT: "6379"
++
+     steps:
+       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+ 
+diff --git a/.gitignore b/.gitignore
+index 7736d02..73f851b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,6 +6,13 @@ logs/*.log.*
+ .DS_Store
+ __pycache__
+ *.pyc
++
++# Test / coverage artifacts
++.coverage
++.coverage.*
++coverage.xml
++htmlcov/
++.pytest_cache/
+ .agents/
+ audit_artifacts/
+ 
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 70fa437..0fdf731 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -132,10 +132,23 @@ def vectorstore(tmp_path):
+     )
+ 
+ 
++def _public_getaddrinfo(host, *args, **kwargs):
++    """Resolve any host to a fixed public IP so ingest tests stay hermetic.
++
++    The SSRF guard (utils.security.validate_download_url) now performs a real DNS
++    lookup to block hosts that resolve to private/metadata IPs. Ingest tests mock
++    all HTTP via the `responses` library but do not control DNS, so we pin
++    resolution to a public address here. Tests that exercise the *blocking*
++    behaviour patch getaddrinfo themselves (see tests/test_security.py).
++    """
++    return [(2, 1, 6, "", ("93.184.216.34", 0))]
++
++
+ @pytest.fixture
+ def ingest_env(fake_redis, vectorstore):
+     with (
+         patch("ingest.policies.get_redis", return_value=fake_redis),
+         patch("ingest.policies.get_vectorstore", return_value=vectorstore),
++        patch("utils.security.socket.getaddrinfo", _public_getaddrinfo),
+     ):
+         yield fake_redis, vectorstore
+diff --git a/tests/test_security.py b/tests/test_security.py
+index 220c6d1..d1b3bb2 100644
+--- a/tests/test_security.py
++++ b/tests/test_security.py
+@@ -1,10 +1,21 @@
+ """Tests for utils/security.py SSRF protection."""
+ 
++from unittest.mock import patch
++
+ import pytest
+ 
+ from utils.security import SSRFError, validate_download_url
+ 
+ 
++def _fake_getaddrinfo(ip):
++    """Build a socket.getaddrinfo replacement that always resolves to `ip`."""
++
++    def _inner(host, *args, **kwargs):
++        return [(2, 1, 6, "", (ip, 0))]
++
++    return _inner
++
++
+ class TestSSRFValidation:
+     def test_private_ip_10_blocked(self):
+         with pytest.raises(SSRFError, match="private/internal"):
+@@ -35,7 +46,9 @@ class TestSSRFValidation:
+         validate_download_url("http://example.com/file.pdf", ["example.com"])
+ 
+     def test_wildcard_allows_public_but_blocks_private(self):
+-        validate_download_url("http://example.com/file.pdf", ["*"])
++        # Public hostname resolves to a public IP → allowed.
++        with patch("utils.security.socket.getaddrinfo", _fake_getaddrinfo("93.184.216.34")):
++            validate_download_url("http://example.com/file.pdf", ["*"])
+         with pytest.raises(SSRFError, match="private/internal"):
+             validate_download_url("http://192.168.1.1/file.pdf", ["*"])
+ 
+@@ -46,3 +59,30 @@ class TestSSRFValidation:
+     def test_no_hostname_rejected(self):
+         with pytest.raises(SSRFError, match="no valid hostname"):
+             validate_download_url("http:///file.pdf", ["*"])
++
++    # ── DNS-rebinding hardening ──────────────────────────────────────────────
++
++    def test_public_host_resolving_to_metadata_ip_blocked(self):
++        # A public-looking hostname that resolves to the cloud metadata IP.
++        with patch("utils.security.socket.getaddrinfo", _fake_getaddrinfo("169.254.169.254")):
++            with pytest.raises(SSRFError, match="resolves to a private/internal"):
++                validate_download_url("http://evil.example/file.pdf", ["*"])
++
++    def test_public_host_resolving_to_rfc1918_blocked(self):
++        with patch("utils.security.socket.getaddrinfo", _fake_getaddrinfo("10.1.2.3")):
++            with pytest.raises(SSRFError, match="resolves to a private/internal"):
++                validate_download_url("http://rebind.example/file.pdf", ["*"])
++
++    def test_unresolvable_host_fails_closed(self):
++        import socket as _socket
++
++        def _boom(*a, **k):
++            raise _socket.gaierror("name or service not known")
++
++        with patch("utils.security.socket.getaddrinfo", _boom):
++            with pytest.raises(SSRFError, match="Could not resolve host"):
++                validate_download_url("http://nope.invalid/file.pdf", ["*"])
++
++    def test_explicit_allowlisted_host_skips_dns_resolution(self):
++        # Operator opt-in: an explicitly allowlisted host is trusted and not resolved.
++        validate_download_url("http://internal.corp/file.pdf", ["internal.corp"])
+diff --git a/utils/security.py b/utils/security.py
+index 57a9d0d..a1eeb3a 100644
+--- a/utils/security.py
++++ b/utils/security.py
+@@ -1,33 +1,60 @@
+ import ipaddress
+ import logging
++import socket
+ from urllib.parse import urlparse
+ 
+ logger = logging.getLogger(__name__)
+ 
++# Hostnames that must never be fetched even though they are not literal IPs.
++_BLOCKED_HOSTNAMES = {
++    "localhost",
++    "metadata.google.internal",
++    "metadata",  # AWS/Azure metadata short name
++}
++
+ 
+ class SSRFError(ValueError):
+     """Raised when a URL resolves to a private/internal IP address."""
+ 
+ 
+-def _is_private_ip(hostname: str) -> bool:
+-    """Check if a hostname resolves to a private, link-local, or loopback IP."""
++def _ip_is_blocked(ip_str: str) -> bool:
++    """Return True if an IP literal falls in a private/internal/reserved range."""
+     try:
+-        # Try to parse as an IP address directly
+-        ip = ipaddress.ip_address(hostname)
+-        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
++        ip = ipaddress.ip_address(ip_str)
+     except ValueError:
+-        pass
+-
+-    # Common blocked hostnames (cloud metadata, internal services)
+-    blocked_hosts = {
+-        "localhost",
+-        "metadata.google.internal",
+-        "metadata",  # AWS/Azure metadata short name
+-    }
+-    if hostname.lower() in blocked_hosts:
++        # Not parseable as an IP — treat as non-blocking here; callers handle hostnames.
++        return False
++    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
++
++
++def _is_private_ip(hostname: str) -> bool:
++    """Check a hostname *string* (literal IP or known-bad name) without DNS resolution."""
++    if _ip_is_blocked(hostname):
+         return True
++    return hostname.lower() in _BLOCKED_HOSTNAMES
++
++
++def _resolve_and_check(hostname: str) -> None:
++    """Resolve a hostname via DNS and block it if *any* resolved IP is private/internal.
++
++    This closes the DNS-rebinding gap: a public-looking hostname (e.g. ``evil.example``)
++    that resolves to ``169.254.169.254`` or an RFC1918 address would otherwise pass the
++    literal-string checks. Resolution failures fail *closed* (raise SSRFError) so a
++    bad/unknown host is never fetched.
++
++    NOTE: a TOCTOU window remains between this check and the actual request (DNS can
++    change). Combined with ``allow_redirects=False`` at the call site this is a strong
++    mitigation; a fully airtight fix requires pinning the validated IP for the request.
++    """
++    try:
++        infos = socket.getaddrinfo(hostname, None)
++    except socket.gaierror as e:
++        raise SSRFError(f"Could not resolve host '{hostname}': {e}") from e
+ 
+-    return False
++    resolved = {info[4][0] for info in infos}
++    for ip in resolved:
++        if _ip_is_blocked(ip):
++            raise SSRFError(f"Host '{hostname}' resolves to a private/internal IP address: {ip}")
+ 
+ 
+ def validate_download_url(url: str, allowed_hosts: list[str]) -> None:
+@@ -37,29 +64,32 @@ def validate_download_url(url: str, allowed_hosts: list[str]) -> None:
+     Blocks:
+       - Private IP ranges (10/8, 172.16/12, 192.168/16, 127/8)
+       - Link-local addresses (169.254/16, fe80::/10)
+-      - Loopback (::1/128)
++      - Loopback (::1/128), reserved and unspecified addresses
+       - Cloud metadata endpoints (169.254.169.254)
++      - Public hostnames that *resolve* to any of the above (DNS-rebinding defense)
+ 
+     Allows:
+-      - Any public host when allowed_hosts contains "*"
+-      - Specific hosts listed in allowed_hosts
++      - Any public host when allowed_hosts contains "*" (after DNS resolution check)
++      - Specific hosts explicitly listed in allowed_hosts (operator opt-in; trusted)
+     """
+     parsed = urlparse(url)
+     hostname = parsed.hostname
+     if not hostname:
+         raise SSRFError("URL has no valid hostname")
+ 
+-    # Allowlist check
++    # Wildcard: allow any public host, but block private literals AND hosts that
++    # resolve to private addresses.
+     if "*" in allowed_hosts:
+-        # Still block private IPs even with wildcard allow
+         if _is_private_ip(hostname):
+             raise SSRFError(f"URL resolves to a private/internal IP address: {hostname}")
++        _resolve_and_check(hostname)
+         return
+ 
++    # Explicit allowlist entry — operator has vouched for this host; trust it as-is.
+     if hostname in allowed_hosts:
+         return
+ 
+-    # Not in allowlist — check if it's private anyway
++    # Not in allowlist — reject (still surface a private-IP reason when applicable).
+     if _is_private_ip(hostname):
+         raise SSRFError(f"URL resolves to a private/internal IP address: {hostname}")
+ 

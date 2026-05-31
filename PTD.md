@@ -3,7 +3,7 @@
 Technical reference for engineers and operators. For consumer usage see
 [`user_guidelines.md`](user_guidelines.md); for setup see [`README.md`](README.md).
 
-**Version:** API 1.1.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-05-30
+**Version:** API 2.1.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-05-30
 
 ---
 
@@ -13,6 +13,15 @@ Technical reference for engineers and operators. For consumer usage see
 policy documents into a vector store, answers questions grounded in those documents
 (with selectable strictness), keeps per-user conversation memory, and exposes a versioned
 HTTP API plus a reference web client.
+
+**Lineage.** This builds on the fork's **v2.0.0** release (multi-mode chat, self-ingestion,
+14-provider support, security hardening — see `CHANGELOG.md`). The **v2.1.0** work
+documented here adds the versioned `/api/v1` contract, SSE streaming, structured
+citations, async ingest, and the reference web client, and incorporates an independent
+audit's fixes (the `get_llm` generation-params crash, SSRF redirect+DNS hardening, 5xx
+information-leak, memory-key namespacing, synthesized-collection isolation, and CI/test
+repairs). Retrieval continues to use the **score gate + MMR** design from v1.0.0 — MMR was
+never dropped; citation scores are obtained alongside it (see §6, §15).
 
 ---
 
@@ -112,7 +121,7 @@ sources, chat_mode, best_score, last_answer, self_ingested, lang, top_k, score_t
 | Node | Reads | Writes | Notes |
 |------|-------|--------|-------|
 | `load_memory` | `user_id` | `messages`, `summary` | Reads `chat:memory:{user_id}` from Redis. |
-| `retrieve_context` | `question`, `chat_mode`, `top_k`, `score_threshold` | `docs`, `sources`, `best_score` | Scored top-k; strict blocks below threshold; learning also queries the synthesized store. Returns structured citations. |
+| `retrieve_context` | `question`, `chat_mode`, `top_k`, `score_threshold` | `docs`, `sources`, `best_score` | Relevance gate (strict blocks below threshold) → **MMR** for diverse selection above threshold; learning also queries the synthesized store. Returns structured citations with scores joined from the scored candidate pool. |
 | `generate_answer` | `summary`, `messages`, `docs`, `question`, `lang`, `chat_mode` | `messages`, `last_answer`, `lang` | Resolves language (auto/en/ar); calls the LLM. |
 | `self_ingest` | `chat_mode`, `best_score`, `last_answer` | `self_ingested` | Learning-only; writes synthesized answers to the **separate** collection. |
 | `summarize` | `messages` | `summary`, `messages` | Summarizes when ≥4 messages; truncates to last 6. |
@@ -241,8 +250,12 @@ GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
   `/api` working (deprecated) — avoids breaking existing consumers.
 - **problem+json app-wide:** one error contract is strictly better than three; applied to
   all routes.
-- **Scored top-k over MMR:** the above-threshold path uses scored retrieval so each
-  citation carries a relevance score; MMR diversity can be reintroduced later (join scores).
+- **MMR retained, scores joined (not either/or):** above-threshold retrieval uses MMR for
+  diverse, non-redundant chunks (the documented v1.0.0 behavior — valuable given
+  `chunk_overlap=100`, small `k`, and versioned ingestion). Per-citation relevance scores
+  come from scoring the candidate pool once and joining by `chunk_hash`. An earlier change
+  had replaced MMR with scored top-k to get scores; that was an unforced quality regression
+  and has been reverted.
 - **Synthesized isolation:** separate collection prevents model-generated content from
   surfacing as authoritative.
 - **BackgroundTasks for async ingest:** simple, in-process; a Celery/RQ worker is the
@@ -253,11 +266,30 @@ GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
 
 ## 16. Known limitations / roadmap
 
+- **Retrieval quality is not validated against a live corpus.** The test suite is hermetic
+  — ChromaDB and embeddings are mocked. Unit/contract tests verify *that* MMR is invoked
+  and *that* citation scores are joined, but they do **not** measure real retrieval
+  relevance or MMR diversity on actual documents. A live evaluation (e.g. RAGAS, or manual
+  spot-checks against your corpus) is recommended before relying on answer quality, and
+  after any change to chunking, `top_k`, `fetch_k`, or the embedding model.
 - **`chromadb 1.5.9` / CVE-2026-45829** (pre-auth RCE) — no upstream fix yet; mitigated by
   embedded (non-server) use. Track and upgrade when patched; never expose the Chroma
   server API on the network.
-- **No `/chat` authentication** by default (identity is scoped, not authenticated).
-- **In-process async ingest** — move to a worker/broker for durability and horizontal
-  scale.
-- **`retrieve_context` complexity** is creeping (CC ~14) — candidate for a small refactor.
-- See [`README.md`](README.md) → Roadmap for the broader TODO list.
+- **No `/chat` authentication** by default (identity is scoped/validated, not
+  authenticated). Gate behind auth if conversation memory is sensitive.
+- **SSRF guard has a TOCTOU window.** `validate_download_url` resolves DNS at check time;
+  the subsequent request resolves again and could differ. Combined with
+  `allow_redirects=False` this is a strong mitigation, not airtight — pinning the validated
+  IP for the connection would close it.
+- **Rate limiter fails open.** If Redis is unavailable, requests are allowed (availability
+  over enforcement). Pair with alerting on Redis loss; the open window is otherwise silent.
+- **MMR tuning is defaulted.** `fetch_k = max(10, top_k*4)` and LangChain's `lambda_mult`
+  default (0.5) are not yet configurable; extreme `top_k` or unusual corpora may want
+  tuning. Score↔chunk join relies on `chunk_hash` (falls back to content) — a citation
+  shows `score: null` if a selected chunk isn't in the scored candidate pool.
+- **In-process async ingest** — uses FastAPI `BackgroundTasks` (single process, not
+  durable across restarts); move to a worker/broker (Celery/RQ) for durability and scale.
+- **`retrieve_context` complexity** is CC 15 (radon) — a candidate for extracting the
+  weak-match branch into a helper.
+- See [`README.md`](README.md) → Roadmap and [`CHANGELOG.md`](CHANGELOG.md) `[2.1.0]` →
+  Known limitations for the broader list.

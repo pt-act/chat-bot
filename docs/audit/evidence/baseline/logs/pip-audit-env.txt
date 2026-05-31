@@ -1,0 +1,4 @@
+Found 1 known vulnerability in 1 package
+Name     Version ID             Fix Versions
+-------- ------- -------------- ------------
+chromadb 1.5.9   CVE-2026-45829

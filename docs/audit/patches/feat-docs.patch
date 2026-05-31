@@ -1,0 +1,657 @@
+diff --git a/PTD.md b/PTD.md
+new file mode 100644
+index 0000000..c6499ef
+--- /dev/null
++++ b/PTD.md
+@@ -0,0 +1,263 @@
++# Project Technical Document (PTD) — `chat-bot`
++
++Technical reference for engineers and operators. For consumer usage see
++[`user_guidelines.md`](user_guidelines.md); for setup see [`README.md`](README.md).
++
++**Version:** API 1.1.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-05-30
++
++---
++
++## 1. Purpose & scope
++
++`chat-bot` is a Retrieval-Augmented Generation (RAG) chatbot service. It ingests PDF
++policy documents into a vector store, answers questions grounded in those documents
++(with selectable strictness), keeps per-user conversation memory, and exposes a versioned
++HTTP API plus a reference web client.
++
++---
++
++## 2. High-level architecture
++
++```
++                       ┌─────────────────────────── FastAPI app (main.py) ───────────────────────────┐
++   Client / Web SPA →  │  Middleware chain (outer→inner):                                              │
++   (web/)              │   CorrelationId → RequestTiming → Deprecation → RateLimit → CORS             │
++                       │  Routers:  /api/v1 (typed)   +   /api (legacy, deprecated)                    │
++                       │  Errors:  RFC 9457 problem+json (middlewares/errors.py)                       │
++                       └───────────┬───────────────────────────────────────┬─────────────────────────┘
++                                   │ controllers/v1/{chat,ingest}           │ controllers/{chat,ingest}_controller
++                                   ▼                                        ▼
++                         services/chat_service        services/ingest_service → ingest/policies
++                                   │                                        │
++                       ┌───────────▼────────────┐                ┌──────────▼───────────┐
++                       │ LangGraph pipeline      │                │ PDF download (SSRF-   │
++                       │ (graph/builder + nodes) │                │ guarded) → chunk →    │
++                       └───────────┬────────────┘                │ embed → upsert        │
++                                   │                              └──────────┬───────────┘
++                    ┌──────────────┼───────────────┐                        │
++                    ▼              ▼               ▼                         ▼
++              Redis (memory,  ChromaDB        LLM/Embeddings           ChromaDB (policies
++              rate limits)   (policies +      (utils/llm_adapter,      collection) + Redis
++                             synthesized)     embedding_adapter)       (status/hashes)
++```
++
++---
++
++## 3. Tech stack
++
++- **Web framework:** FastAPI / Starlette, Uvicorn.
++- **Orchestration:** LangGraph (`StateGraph`) + LangChain.
++- **LLM providers:** OpenAI-compatible (OpenAI, Ollama, OpenRouter, Together, Groq,
++  DeepSeek, Fireworks, Mistral, vLLM, LM Studio, llama.cpp), Anthropic, Google Gemini —
++  via `utils/llm_adapter`.
++- **Embeddings:** OpenAI, FastEmbed, HuggingFace — via `utils/embedding_adapter`.
++- **Vector store:** ChromaDB (embedded/persistent) via `langchain-chroma`.
++- **Cache/state:** Redis (conversation memory, rate-limit counters, ingest metadata).
++- **Config:** pydantic-settings (`config.py`).
++- **Web client:** Vite + React + TypeScript (`web/`).
++- **Tooling:** pytest + coverage, ruff, bandit, pip-audit; GitHub Actions CI.
++
++---
++
++## 4. Components
++
++| Area | Module(s) | Responsibility |
++|------|-----------|----------------|
++| App wiring | `main.py` | App, middleware order, router mounting (v1 + legacy), error handlers, health/ready. |
++| Config | `config.py` | Typed settings + validators (provider keys, chat mode, CORS, embeddings). |
++| Controllers (v1) | `controllers/v1/{chat,ingest}.py` | Typed envelopes, SSE streaming, async ingest, pagination. |
++| Controllers (legacy) | `controllers/{chat,ingest}_controller.py` | Backward-compatible unversioned endpoints. |
++| Services | `services/{chat,ingest}_service.py` | Orchestrate the graph / ingest pipeline; `stream_conversation`. |
++| Graph | `graph/builder.py`, `graph/state.py`, `graph/nodes/*` | RAG pipeline nodes & wiring. |
++| Ingest | `ingest/policies.py`, `ingest/keys.py` | Download→chunk→embed→upsert; Redis key constants. |
++| DB | `db/redis_client.py`, `db/vector.py` | Redis client + `memory_key`; Chroma accessors + `VectorStoreRepository`. |
++| Adapters | `utils/llm_adapter.py`, `utils/embedding_adapter.py` | Provider selection. |
++| Security | `utils/security.py`, `middlewares/auth.py` | SSRF guard (DNS-aware); API-key dependency. |
++| Middleware | `middlewares/{observability,rate_limiter,errors,logging_setup}.py` | Correlation id, timing, rate limiting + headers, problem+json, logging. |
++| Schemas | `schemas/{chat,ingest,responses}.py` | Request validation + typed responses + problem model. |
++
++---
++
++## 5. Request lifecycle
++
++### Synchronous chat (`POST /api/v1/chat`)
++1. Middleware assigns/propagates `X-Correlation-Id`; rate limiter increments the per-IP
++   window and sets `X-RateLimit-*`.
++2. Controller validates `X-User-Id`, calls `chat_service.conversation(...)` with overrides.
++3. `conversation` builds the initial `State` and invokes the compiled graph.
++4. Graph runs: `load_memory → retrieve_context → generate_answer → self_ingest →
++   summarize → store_memory`.
++5. Controller maps the result to `ChatResponse` (answer + structured `sources` + `meta`).
++
++### Streaming chat (`POST /api/v1/chat/stream`)
++`stream_conversation` runs `load_memory` + `retrieve_context` synchronously, **streams**
++the LLM answer token-by-token (`get_llm(...).stream(prompt)` via the shared
++`build_chat_prompt`), then runs `self_ingest → summarize → store_memory` **after** the
++stream so memory persists even though the client saw tokens first. Emits SSE
++`token`/`sources`/`done` (and `error` on failure, with no internal text).
++
++### Async ingest (`POST /api/v1/ingest`)
++Writes an initial `queued` status to Redis, schedules `ingest_file` via FastAPI
++`BackgroundTasks`, returns `202` + `Location`. `process_policy` downloads (SSRF-guarded,
++no redirects), hashes, chunks (`RecursiveCharacterTextSplitter`), embeds, diffs against
++prior chunk hashes, upserts changed chunks, and records `done`/`failed` status.
++
++---
++
++## 6. LangGraph pipeline
++
++`State` (TypedDict, `total=False`): `user_id, question, messages, docs, summary,
++sources, chat_mode, best_score, last_answer, self_ingested, lang, top_k, score_threshold`.
++
++| Node | Reads | Writes | Notes |
++|------|-------|--------|-------|
++| `load_memory` | `user_id` | `messages`, `summary` | Reads `chat:memory:{user_id}` from Redis. |
++| `retrieve_context` | `question`, `chat_mode`, `top_k`, `score_threshold` | `docs`, `sources`, `best_score` | Scored top-k; strict blocks below threshold; learning also queries the synthesized store. Returns structured citations. |
++| `generate_answer` | `summary`, `messages`, `docs`, `question`, `lang`, `chat_mode` | `messages`, `last_answer`, `lang` | Resolves language (auto/en/ar); calls the LLM. |
++| `self_ingest` | `chat_mode`, `best_score`, `last_answer` | `self_ingested` | Learning-only; writes synthesized answers to the **separate** collection. |
++| `summarize` | `messages` | `summary`, `messages` | Summarizes when ≥4 messages; truncates to last 6. |
++| `store_memory` | `messages`, `summary`, `user_id` | — | Persists to Redis with TTL. |
++
++Edges are linear: `START → load_memory → retrieve_context → generate_answer →
++self_ingest → summarize → store_memory → END`.
++
++---
++
++## 7. Storage model
++
++**Redis keys**
++- `chat:memory:{user_id}` → JSON `{summary, messages[]}` (TTL `REDIS_TTL_SECONDS`).
++- `rate_limit:{ip}:{window}` → counter (TTL = window + 1s).
++- `ingest_status:{doc_id}` (hash), `doc_chunks:{doc_id}` (set of chunk hashes),
++  `ingest:doc_ids` (set), `ingest:content_hashes` (hash) — centralized in `ingest/keys.py`.
++
++**ChromaDB collections** (same persist dir, different names)
++- `policies` (configurable) — authoritative ingested chunks. Metadata: `doc_id`,
++  `source_file`, `file_hash`, `chunk_hash`, `chunk_index`, `page_number`, `version`.
++- `synthesized_answers` — learning-mode synthesized content; consulted only in learning
++  mode (isolation prevents knowledge-base poisoning).
++
++---
++
++## 8. Configuration (key env vars)
++
++| Var | Default | Purpose |
++|-----|---------|---------|
++| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_BASE_URL` | openai / gpt-4o-mini / "" | Model selection; base URL for OpenAI-compatible endpoints. |
++| `OPENAI/ANTHROPIC/GOOGLE/GROQ_API_KEY` | "" | Provider credentials (validated when selected). |
++| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | openai / text-embedding-3-small | Embedding backend. |
++| `REDIS_HOST/PORT/PASSWORD` / `REDIS_TTL_SECONDS` | localhost/6379/""/86400 | Redis + memory TTL. |
++| `CHROMA_PERSIST_DIR` / `CHROMA_COLLECTION` / `SYNTHESIZED_COLLECTION` | ./chroma_db / policies / synthesized_answers | Vector store. |
++| `CHAT_MODE` / `RETRIEVAL_SCORE_THRESHOLD` / `SELF_INGEST_MIN_LENGTH` | strict / 0.3 / 50 | RAG behavior. |
++| `MAX_FILE_SIZE_MB` / `DOWNLOAD_TIMEOUT_SECONDS` | 50 / 30 | Ingest limits. |
++| `API_KEY` / `REQUIRE_AUTH_FOR_INGEST` | "" / false | Ingest auth. |
++| `CORS_ORIGINS` / `ALLOWED_HOSTS` / `TRUSTED_PROXIES` | [] / ["*"] / [] | CORS, SSRF allowlist, proxy-aware rate limiting. |
++| `DEBUG` / `LOG_LEVEL` / `LOG_FORMAT` | false / INFO / text | Logging (`json` for aggregators). |
++
++---
++
++## 9. API surface
++
++**v1 (typed envelopes, problem+json errors)**
++- `POST /api/v1/chat` → `ChatResponse`
++- `POST /api/v1/chat/stream` → `text/event-stream`
++- `POST /api/v1/ingest` → `202 IngestResult` (+ `Location`)
++- `GET /api/v1/ingest/status/{doc_id}` → `IngestResult`
++- `GET /api/v1/ingest/docs?limit&cursor` → `DocsListResponse`
++- `DELETE /api/v1/ingest/{doc_id}` → `DeleteResponse`
++
++**System:** `GET /health` (cached), `GET /ready` (live, 200/503), `GET /`.
++**Legacy:** `/api/*` mirrors the above with the old envelope; responses carry
++`Deprecation`/`Sunset`/`Link`. OpenAPI at `/docs`, `/redoc`, `/openapi.json`.
++
++---
++
++## 10. Security model
++
++- **Error model:** problem+json everywhere; 5xx never echo internal text (detail logged
++  with correlation id).
++- **SSRF:** `validate_download_url` blocks private/loopback/link-local/reserved IPs,
++  resolves DNS to defeat rebinding, and the downloader sets `allow_redirects=False`.
++  `ALLOWED_HOSTS` is an explicit allowlist; `*` allows public hosts only.
++- **Ingest auth:** `X-API-Key` dependency — `DELETE` always; others when
++  `REQUIRE_AUTH_FOR_INGEST=true`.
++- **Memory safety:** `X-User-Id` validated (`[A-Za-z0-9_.@-]{1,128}`) and namespaced
++  (`chat:memory:`) so it cannot collide with operational keys.
++- **Rate limiting:** per-IP sliding window in Redis, proxy-aware (`TRUSTED_PROXIES`),
++  with `X-RateLimit-*` + `Retry-After`; fails open if Redis is down (availability choice).
++- **CORS:** driven by `CORS_ORIGINS`; warns on `*`. Set explicit origins in production.
++
++---
++
++## 11. Observability
++
++- **Correlation id:** `X-Correlation-Id` accepted or generated; propagated via a
++  `contextvar` and injected into every log line; returned in responses and problem bodies.
++- **Request timing:** method/path/status/duration logged per request.
++- **Logging:** text or structured JSON (`LOG_FORMAT=json`) with rotating file handler.
++
++---
++
++## 12. Testing
++
++- **Framework:** pytest + pytest-cov. **Status:** 178 tests, ~97% line coverage, hermetic
++  (fakeredis + mocked DNS/boundaries; no live Redis or network required).
++- **Layers:** unit (nodes, adapters, security, schemas), API/contract (`test_api_v1.py`,
++  problem+json, deprecation, OpenAPI), streaming (`test_streaming.py`), async ingest +
++  pagination (`test_async_ingest.py`), and an **end-to-end graph integration test**
++  (`test_graph_integration.py`) that drives the real `get_llm` path (regression guard for
++  the original signature-mismatch crash).
++- **Web:** `tsc -b` typecheck + `vite build`; `bun audit` clean.
++
++---
++
++## 13. CI/CD
++
++GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
++1. **security** — bandit + pip-audit.
++2. **lint** — ruff check + format check.
++3. **test** — provisions a `redis:7-alpine` service + explicit env; pytest with coverage
++   gate.
++4. **docker** — build + smoke test.
++
++---
++
++## 14. Deployment
++
++- **Docker Compose:** `docker-compose.yml` (api + redis), `.local`/`.test` variants.
++- **Process:** `uvicorn main:app --host 0.0.0.0 --port 8000 --workers N`.
++- **Web client:** build `web/` and serve `dist/` statically; configure `CORS_ORIGINS` or
++  reverse-proxy `/api`.
++- **SSE behind proxies:** endpoint sets `Cache-Control: no-cache` and
++  `X-Accel-Buffering: no`; ensure the proxy does not buffer event streams.
++- **Scaling:** memory/rate-limit state is in Redis (shared across workers). Health at
++  `/health`, readiness at `/ready`.
++
++---
++
++## 15. Design decisions & trade-offs
++
++- **Versioned API + legacy alias:** introduce `/api/v1` typed envelopes while keeping
++  `/api` working (deprecated) — avoids breaking existing consumers.
++- **problem+json app-wide:** one error contract is strictly better than three; applied to
++  all routes.
++- **Scored top-k over MMR:** the above-threshold path uses scored retrieval so each
++  citation carries a relevance score; MMR diversity can be reintroduced later (join scores).
++- **Synthesized isolation:** separate collection prevents model-generated content from
++  surfacing as authoritative.
++- **BackgroundTasks for async ingest:** simple, in-process; a Celery/RQ worker is the
++  durability/scale upgrade path.
++- **Rate limiter fails open:** prioritizes availability; pair with alerting on Redis loss.
++
++---
++
++## 16. Known limitations / roadmap
++
++- **`chromadb 1.5.9` / CVE-2026-45829** (pre-auth RCE) — no upstream fix yet; mitigated by
++  embedded (non-server) use. Track and upgrade when patched; never expose the Chroma
++  server API on the network.
++- **No `/chat` authentication** by default (identity is scoped, not authenticated).
++- **In-process async ingest** — move to a worker/broker for durability and horizontal
++  scale.
++- **`retrieve_context` complexity** is creeping (CC ~14) — candidate for a small refactor.
++- See [`README.md`](README.md) → Roadmap for the broader TODO list.
+diff --git a/README.md b/README.md
+index 25f355b..84f2b83 100644
+--- a/README.md
++++ b/README.md
+@@ -26,6 +26,8 @@
+ - [Document Ingestion](#-6-document-ingestion-s3--chromadb)
+ - [Chat API](#-7-chat-api)
+ - [Health & Readiness](#-8-health--readiness)
++- [Web Client](#-web-client)
++- [Further Documentation](#-further-documentation)
+ - [Observability](#-observability)
+ - [Core System Design](#-core-system-design)
+ - [Security](#-security)
+@@ -369,35 +371,42 @@ All settings are pre-configured in `docker-compose.local.yml`:
+ 
+ ## 📥 6. Document Ingestion (S3 → ChromaDB)
+ 
+-### Ingest a document
++On `/api/v1`, ingestion is **asynchronous**: the request returns `202 Accepted` with
++`status=queued` and a `Location` header, then processes in the background — poll the
++status endpoint for progress. (Legacy `/api/ingest` remains synchronous.)
++
++### Queue a document
+ 
+ ```bash
+-curl -X POST "http://127.0.0.1:8000/api/ingest" \
++curl -X POST "http://127.0.0.1:8000/api/v1/ingest" \
+   -H "Content-Type: application/json" \
+-  -d '{
+-    "file_name": "terms_conditions",
+-    "s3_url": "https://your-s3-url.pdf"
+-  }'
++  -d '{"file_name": "terms_conditions", "s3_url": "https://your-s3-url.pdf"}'
++# → 202  {"doc_id": "terms_conditions", "status": "queued"}
+ ```
+ 
+-### Check ingest status
++### Check ingest status (poll)
+ 
+ ```bash
+-curl http://127.0.0.1:8000/api/ingest/status/terms_conditions
++curl http://127.0.0.1:8000/api/v1/ingest/status/terms_conditions
++# → {"doc_id": "...", "status": "done", "added": 12, "total": 12, "version": "..."}
+ ```
+ 
+-### List all ingested documents
++### List ingested documents (paginated)
+ 
+ ```bash
+-curl http://127.0.0.1:8000/api/ingest/docs
++curl "http://127.0.0.1:8000/api/v1/ingest/docs?limit=50&cursor=0"
++# → {"total": N, "docs": [...], "next_cursor": "50"}
+ ```
+ 
+ ### Delete a document
+ 
+ ```bash
+-curl -X DELETE http://127.0.0.1:8000/api/ingest/terms_conditions
++curl -X DELETE http://127.0.0.1:8000/api/v1/ingest/terms_conditions
+ ```
+ 
++> Ingest management endpoints honor API-key auth — `DELETE` always requires `X-API-Key`,
++> and the others require it when `REQUIRE_AUTH_FOR_INGEST=true`.
++
+ ## 💬 7. Chat API
+ 
+ ### Chat Modes
+@@ -410,7 +419,9 @@ The system supports three interaction modes via `CHAT_MODE` in `.env`:
+ | **open** | Free interaction | Uses general knowledge, honest about provenance | No | General assistants, brainstorming |
+ | **learning** | Free interaction + growing KB | Synthesizes answer, auto-saves to ChromaDB | Yes (≥50 chars, no docs found) | Knowledge-building, research assistants |
+ 
+-> **Learning mode quality gate:** Only auto-ingests responses when (1) no documents matched the question (filling a knowledge gap) and (2) the answer is ≥50 characters. All synthesized entries are tagged with `source_type=synthesized` so you can distinguish model-generated content from ingested documents.
++> **Learning mode quality gate:** Only auto-ingests responses when (1) no documents matched the question (filling a knowledge gap) and (2) the answer is ≥50 characters. Synthesized entries live in a **separate ChromaDB collection** (`synthesized_answers`) and are only consulted in `learning` mode — they never pollute `strict`/`open` retrieval.
++
++`CHAT_MODE` sets the server default; clients can override it **per request** (see below).
+ 
+ ```env
+ # In .env
+@@ -418,30 +429,68 @@ CHAT_MODE=strict    # or open, or learning
+ SELF_INGEST_MIN_LENGTH=50
+ ```
+ 
+-### Endpoint
++### API versions
++
++The API is **versioned**. New clients should use `/api/v1`; the unversioned `/api/*`
++paths still work but are **deprecated** (responses carry `Deprecation`/`Sunset`/`Link`
++headers). Errors everywhere use **RFC 9457 `application/problem+json`**.
++
++| | `/api/v1` (recommended) | `/api` (legacy, deprecated) |
++|---|---|---|
++| Chat response | `{ answer, sources[], meta }` (typed) | `{ status, data, sources[] }` |
++| Sources | structured objects (label, doc_id, score, page, snippet) | bare label strings |
++| Streaming | `POST /api/v1/chat/stream` (SSE) | — |
++| Ingest | `202` + background + poll | synchronous |
++
++### `POST /api/v1/chat`
+ 
++Request (`q` required; the rest are optional per-request overrides):
++
++```jsonc
++{
++  "q": "what is the return policy?",
++  "mode": "strict",        // strict | open | learning  (overrides server default)
++  "lang": "auto",          // auto | en | ar  (auto-detects Arabic vs English)
++  "top_k": 3,              // 1..10 chunks to retrieve
++  "score_threshold": 0.3   // 0..1 minimum relevance
++}
+ ```
+-POST /api/chat
++
++```bash
++curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
++  -H "Content-Type: application/json" -H "X-User-Id: user_123" \
++  -d '{"q":"what is the return policy?"}'
+ ```
+ 
+-### Request
++Response:
+ 
+ ```json
+ {
+-  "q": "what are the return policies?"
++  "answer": "Returns are accepted within 30 days of purchase.",
++  "sources": [
++    {"label": "return_policy.pdf", "doc_id": "return_policy", "score": 0.82, "page": 3, "snippet": "Customers may return..."}
++  ],
++  "meta": {"mode": "strict", "lang": "en", "self_ingested": false, "correlation_id": "…", "model": "gpt-4o-mini"}
+ }
+ ```
+ 
+-### Example
++### `POST /api/v1/chat/stream` (Server-Sent Events)
+ 
+-```bash
+-curl -X POST "http://127.0.0.1:8000/api/chat" \
+-  -H "Content-Type: application/json" \
+-  -H "X-User-ID: user_123" \
+-  -d '{"q":"what is return policy?"}'
++Streams the answer token-by-token. Same request body. Event sequence:
++
++```
++event: token    data: {"delta": "Returns"}
++event: token    data: {"delta": " are"}
++event: sources  data: {"sources": [ … ]}
++event: done     data: {"meta": { … }}
+ ```
+ 
+-> `X-User-ID` identifies the user session — memory is stored and loaded per user. Defaults to `anonymous` if omitted.
++On failure an `event: error` frame is emitted (no internal detail). Each response
++includes a `X-Correlation-Id` header and rate-limit headers
++(`X-RateLimit-Limit/Remaining/Reset`, plus `Retry-After` on `429`).
++
++> `X-User-Id` scopes per-user conversation memory (defaults to `anonymous`). It is
++> validated (`[A-Za-z0-9_.@-]{1,128}`) and namespaced internally.
+ 
+ ## 🏥 8. Health & Readiness
+ 
+@@ -461,6 +510,30 @@ curl http://127.0.0.1:8000/ready
+ 
+ Returns `200` with `{"status": "ready"}` only if both Redis and ChromaDB respond right now. Returns `503` with dependency-specific error details if either is down. Use this for Kubernetes readiness probes or load balancer health checks.
+ 
++## 🖥️ Web Client
++
++A reference single-page client lives in [`web/`](web/) (Vite + React + TypeScript). It
++demonstrates the v1 API end-to-end: **streaming chat** (SSE), per-request **mode**/
++**language** selectors, **structured citations**, **RTL/Arabic** rendering, accessibility
++(`aria-live`, keyboard send, focus rings), and a backend health badge.
++
++```bash
++cd web
++bun install      # or npm install
++bun run dev      # http://localhost:5173 (proxies /api and /health to :8000)
++bun run build    # production bundle → web/dist/
++```
++
++See [`web/README.md`](web/README.md) for details.
++
++## 📚 Further Documentation
++
++- [`user_guidelines.md`](user_guidelines.md) — end-user / API-consumer guide (modes,
++  languages, citations, errors, rate limits, streaming, worked examples).
++- [`PTD.md`](PTD.md) — Project Technical Document (architecture, data flow, components,
++  storage, security, observability, testing, CI/CD, deployment, design decisions).
++- [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`CHANGELOG.md`](CHANGELOG.md)
++
+ ## Observability
+ 
+ Every request is tagged with a **correlation ID** (`X-Correlation-Id`) that propagates through all log calls, graph nodes, and service layers. This enables tracing a single request across Redis operations, ChromaDB retrievals, LLM calls, and ingest pipeline steps.
+diff --git a/user_guidelines.md b/user_guidelines.md
+new file mode 100644
+index 0000000..39b4082
+--- /dev/null
++++ b/user_guidelines.md
+@@ -0,0 +1,193 @@
++# User Guidelines
++
++A practical guide for **using** the chatbot — through the HTTP API or the reference web
++client. For internals and operations, see [`PTD.md`](PTD.md).
++
++- Base URL (local): `http://127.0.0.1:8000`
++- Versioned API: **`/api/v1`** (recommended). The unversioned `/api/*` is deprecated.
++- Errors: `application/problem+json` (RFC 9457).
++
++---
++
++## 1. Identity & authentication
++
++| Header | Purpose | Required? |
++|--------|---------|-----------|
++| `X-User-Id` | Scopes your conversation memory. Allowed: `[A-Za-z0-9_.@-]`, ≤128 chars. | Optional (defaults to `anonymous`) |
++| `X-API-Key` | Protects ingest management. | `DELETE` always; others when `REQUIRE_AUTH_FOR_INGEST=true` |
++
++Use a **stable** `X-User-Id` per user so the bot remembers the conversation (memory has a
++TTL, default 24h). Different ids are fully isolated.
++
++> Chatting (`/chat`) is not authenticated by default. Don't send personal data unless the
++> operator has put authentication in front of the service.
++
++---
++
++## 2. Chatting
++
++### Endpoint
++`POST /api/v1/chat`
++
++### Body
++Only `q` is required; everything else is an optional per-request override.
++
++| Field | Type | Default | Notes |
++|-------|------|---------|-------|
++| `q` | string | — | Your question (1–2000 chars). |
++| `mode` | `strict` \| `open` \| `learning` | server default | See modes below. |
++| `lang` | `auto` \| `en` \| `ar` | `auto` | Force the reply language. Auto detects Arabic vs English. |
++| `top_k` | int 1–10 | 3 | How many document chunks to consider. |
++| `score_threshold` | float 0–1 | 0.3 | Minimum relevance for a chunk to be used. |
++
++### Modes
++
++| Mode | What it does |
++|------|--------------|
++| **strict** | Answers **only** from approved documents. If nothing relevant is found, it says it doesn't have the information. Best for policy/regulated answers. |
++| **open** | Prefers documents, but may use general knowledge and tells you when it does. |
++| **learning** | Like open, but when no document matches it synthesizes an answer and saves it to a **separate** learning store for future questions (never mixed into authoritative answers). |
++
++### Example
++
++```bash
++curl -X POST http://127.0.0.1:8000/api/v1/chat \
++  -H "Content-Type: application/json" -H "X-User-Id: alice" \
++  -d '{"q":"How long do I have to return an item?","mode":"strict","top_k":4}'
++```
++
++```json
++{
++  "answer": "You can return any item within 30 days of purchase.",
++  "sources": [
++    {"label": "return_policy.pdf", "doc_id": "return_policy", "score": 0.86, "page": 1,
++     "snippet": "Customers may return any item within 30 days..."}
++  ],
++  "meta": {"mode": "strict", "lang": "en", "self_ingested": false,
++           "correlation_id": "b1f3…", "model": "gpt-4o-mini"}
++}
++```
++
++**Reading the response**
++- `answer` — the reply text.
++- `sources` — the citations behind it. `score` is relevance (0–1); `page`/`snippet` help
++  you verify. In strict mode with no match, `sources` is `[]` and the bot declines.
++- `meta.self_ingested` — `true` only in learning mode when the answer was saved.
++- `meta.correlation_id` — quote this in support requests (also returned as the
++  `X-Correlation-Id` header).
++
++---
++
++## 3. Streaming (typing effect)
++
++`POST /api/v1/chat/stream` returns **Server-Sent Events** so you can render tokens as they
++arrive. Same request body.
++
++Event order: `token` (repeated) → `sources` → `done`. On failure: `error`.
++
++```
++event: token    data: {"delta": "You can "}
++event: token    data: {"delta": "return..."}
++event: sources  data: {"sources": [ … ]}
++event: done     data: {"meta": { … }}
++```
++
++Browser example (POST → can't use `EventSource`, so read the stream):
++
++```js
++const res = await fetch("/api/v1/chat/stream", {
++  method: "POST",
++  headers: { "Content-Type": "application/json", "X-User-Id": "alice" },
++  body: JSON.stringify({ q: "What is the return policy?" }),
++});
++const reader = res.body.getReader();
++const dec = new TextDecoder();
++let buf = "";
++for (;;) {
++  const { done, value } = await reader.read();
++  if (done) break;
++  buf += dec.decode(value, { stream: true });
++  // split on blank lines → SSE frames; parse "event:" and "data:" lines
++}
++```
++
++(The reference web client in `web/` does exactly this, including a **Stop** button that
++aborts mid-stream.)
++
++---
++
++## 4. Errors (problem+json)
++
++All errors share one shape:
++
++```json
++{ "type": "https://errors.chat-bot/validation", "title": "Validation failed",
++  "status": 422, "detail": "Question cannot be empty",
++  "correlation_id": "…", "errors": [{"field": "q", "message": "..."}] }
++```
++
++| Status | Meaning | What to do |
++|--------|---------|------------|
++| 400 | Bad request (e.g. invalid `X-User-Id`) | Fix the input. |
++| 401 | Missing/invalid `X-API-Key` (ingest) | Provide a valid key. |
++| 404 | Unknown `doc_id` | Check the id. |
++| 422 | Validation error | See `errors[]` for the offending field. |
++| 429 | Rate limited | Back off (see below). |
++| 500 | Server error | Retry later; quote `correlation_id`. 5xx bodies never include internal details. |
++
++---
++
++## 5. Rate limits
++
++Every response includes:
++- `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (epoch seconds).
++
++On `429` you also get `Retry-After` (seconds). **Honor it** — wait that long before
++retrying. Default limit is 60 requests/minute per client IP.
++
++---
++
++## 6. Conversation memory
++
++- Stored per `X-User-Id`, with a TTL (default 24h) — old conversations expire.
++- The bot summarizes long chats automatically to stay coherent.
++- To "start fresh", use a new `X-User-Id`.
++
++---
++
++## 7. Managing documents (ingestion)
++
++Ingestion is asynchronous on v1.
++
++```bash
++# Queue (returns 202 + Location header)
++curl -X POST http://127.0.0.1:8000/api/v1/ingest \
++  -H "Content-Type: application/json" \
++  -d '{"file_name":"returns","s3_url":"https://example.com/returns.pdf"}'
++
++# Poll status
++curl http://127.0.0.1:8000/api/v1/ingest/status/returns
++
++# List (paginated)
++curl "http://127.0.0.1:8000/api/v1/ingest/docs?limit=50&cursor=0"
++
++# Delete (needs X-API-Key)
++curl -X DELETE http://127.0.0.1:8000/api/v1/ingest/returns -H "X-API-Key: <key>"
++```
++
++Rules: `file_name` must be non-empty, ≤128 chars, **no dots or slashes**; `s3_url` must be
++a public `https` URL ending in `.pdf`. The server re-ingests only when content changes and
++skips duplicates.
++
++---
++
++## 8. Tips
++
++- **Quote sources** in your UI using the `sources[]` objects — they make answers
++  verifiable.
++- **Pick the right mode**: `strict` for compliance, `open` for general help, `learning`
++  to grow the knowledge base.
++- **Mixed-language** questions reply in Arabic if any Arabic is present (or set
++  `lang` explicitly).
++- **Use streaming** for chat UIs; the non-streaming endpoint for simple integrations.
++- **Always send a correlation-friendly client**: log `X-Correlation-Id` from responses.

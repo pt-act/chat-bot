@@ -1,0 +1,62 @@
+........................................................................ [ 50%]
+........................................................................ [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.10/site-packages/fastapi/testclient.py:1
+  /tmp/poncho/sessions/0b37e70a-9546-45e1-96ec-5659adc517fd/repo/.venv/lib/python3.10/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.10.12-final-0 _______________
+
+Name                               Stmts   Miss  Cover   Missing
+----------------------------------------------------------------
+config.py                             72      9    88%   67, 69, 71, 73, 80, 87, 92-93, 105
+controllers/chat_controller.py        21      4    81%   22-23, 25-26
+controllers/ingest_controller.py      57      4    93%   21-22, 24-25
+db/__init__.py                         3      0   100%
+db/redis_client.py                     7      0   100%
+db/vector.py                          28      6    79%   18, 48, 51, 55, 59, 63
+graph/builder.py                      24      0   100%
+graph/nodes/__init__.py                1      0   100%
+graph/nodes/generate_answer.py        25      1    96%   15
+graph/nodes/load_memory.py            19      0   100%
+graph/nodes/retrieve_context.py       28      0   100%
+graph/nodes/self_ingest.py            27      0   100%
+graph/nodes/store_memory.py           20      0   100%
+graph/nodes/summarize.py              23      1    96%   15
+graph/state.py                        13      0   100%
+ingest/policies.py                   126      3    98%   102, 249-250
+main.py                               87      5    94%   101-102, 128-130
+middlewares/__init__.py                0      0   100%
+middlewares/auth.py                   23      2    91%   43-44
+middlewares/logging_setup.py          18      1    94%   16
+middlewares/observability.py          30      2    93%   19-20
+middlewares/rate_limiter.py           55      5    91%   36-37, 57, 107-109
+prompts/__init__.py                    0      0   100%
+prompts/answer.py                     16      1    94%   13
+prompts/summarize.py                   2      0   100%
+schemas/__init__.py                    3      0   100%
+schemas/chat.py                       12      1    92%   14
+schemas/ingest.py                     22      2    91%   24, 26
+services/chat_service.py               8      3    62%   10-19
+services/ingest_service.py             4      2    50%   7-9
+tests/__init__.py                      0      0   100%
+tests/conftest.py                     36      1    97%   123
+tests/test_adapters.py               337      0   100%
+tests/test_api.py                    143      0   100%
+tests/test_audit_fixes.py             51      0   100%
+tests/test_graph_builder.py           20      1    95%   38
+tests/test_graph_nodes.py            221      0   100%
+tests/test_ingest.py                 145      0   100%
+tests/test_ingest_controller.py       63      0   100%
+tests/test_main.py                    53      0   100%
+tests/test_rate_limiter.py            65      0   100%
+tests/test_security.py                33      0   100%
+utils/__init__.py                      4      0   100%
+utils/embedding_adapter.py            31      0   100%
+utils/llm_adapter.py                  28      0   100%
+utils/security.py                     29      1    97%   64
+----------------------------------------------------------------
+TOTAL                               2033     55    97%
+144 passed, 1 warning in 11.75s

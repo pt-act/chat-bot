@@ -1,0 +1,274 @@
+diff --git a/config.py b/config.py
+index 8dcc009..482a929 100644
+--- a/config.py
++++ b/config.py
+@@ -34,6 +34,9 @@ class Settings(BaseSettings):
+     # Vector DB
+     chroma_persist_dir: str = "./chroma_db"
+     chroma_collection: str = "policies"
++    # Self-ingested (learning-mode) answers go in a SEPARATE collection so unverified,
++    # model-synthesized content never pollutes authoritative strict/open retrieval.
++    synthesized_collection: str = "synthesized_answers"
+ 
+     # Retrieval
+     # Minimum similarity score (0.0–1.0) a chunk must reach to be passed to the LLM.
+diff --git a/db/vector.py b/db/vector.py
+index 0247a79..ea8b0aa 100644
+--- a/db/vector.py
++++ b/db/vector.py
+@@ -4,16 +4,31 @@ from config import get_settings
+ from utils.embedding_adapter import get_embeddings
+ 
+ 
+-def get_vectorstore() -> Chroma:
++def get_vectorstore(collection_name: str | None = None) -> Chroma:
++    """Return the authoritative vector store, or a named collection when given.
++
++    `collection_name=None` uses the configured authoritative collection. The
++    synthesized-answers store lives in the same persist directory under a
++    different collection name (see get_synthesized_vectorstore).
++    """
+     setting = get_settings()
+     return Chroma(
+-        collection_name=setting.chroma_collection,
++        collection_name=collection_name or setting.chroma_collection,
+         persist_directory=setting.chroma_persist_dir,
+         embedding_function=get_embeddings(),
+         collection_metadata={"hnsw:space": "cosine"},
+     )
+ 
+ 
++def get_synthesized_vectorstore() -> Chroma:
++    """Vector store for unverified, model-synthesized (learning-mode) answers.
++
++    Kept separate from the authoritative collection so synthesized content can
++    never surface in strict/open retrieval.
++    """
++    return get_vectorstore(get_settings().synthesized_collection)
++
++
+ class VectorStoreRepository:
+     """
+     Thin adapter around ChromaDB to isolate private _collection API usage.
+diff --git a/graph/nodes/retrieve_context.py b/graph/nodes/retrieve_context.py
+index 1faf504..7b94caf 100644
+--- a/graph/nodes/retrieve_context.py
++++ b/graph/nodes/retrieve_context.py
+@@ -1,11 +1,25 @@
+ import logging
+ 
+ from config import get_settings
+-from db.vector import get_vectorstore
++from db.vector import get_synthesized_vectorstore, get_vectorstore
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _search_synthesized(question: str, k: int = 3) -> list:
++    """Best-effort lookup of previously self-ingested answers (learning mode only).
++
++    Lives in a separate Chroma collection (see db.vector.get_synthesized_vectorstore).
++    Returns [] on any error (e.g. the collection does not exist yet) so retrieval
++    never fails because of the optional synthesized store.
++    """
++    try:
++        return get_synthesized_vectorstore().similarity_search(question, k=k)
++    except Exception as e:  # pragma: no cover - defensive
++        logger.warning("Synthesized-store lookup failed: %s", e)
++        return []
++
++
+ def _source_of(doc) -> str:
+     """Resolve a human-readable source label for a retrieved chunk.
+ 
+@@ -35,6 +49,10 @@ def retrieve_context(state):
+     # Open/learning mode with low scores: provide best available matches (may be weak)
+     if chat_mode != "strict" and best_score < threshold:
+         docs = vs.similarity_search(question, k=3)
++        # Learning mode additionally draws on previously synthesized answers, which
++        # live in a separate collection. Strict/open never see synthesized content.
++        if chat_mode == "learning":
++            docs = docs + _search_synthesized(question, k=3)
+         context = "\n\n".join(d.page_content for d in docs) if docs else ""
+         sources = list({_source_of(d) for d in docs}) if docs else []
+         logger.info("Open/learning mode: providing %d low-score docs (best=%.3f)", len(docs), best_score)
+diff --git a/graph/nodes/self_ingest.py b/graph/nodes/self_ingest.py
+index 5adc47c..0e413b3 100644
+--- a/graph/nodes/self_ingest.py
++++ b/graph/nodes/self_ingest.py
+@@ -4,7 +4,7 @@ import logging
+ from langchain_core.documents import Document
+ 
+ from config import get_settings
+-from db.vector import get_vectorstore
++from db.vector import get_synthesized_vectorstore
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -42,7 +42,8 @@ def self_ingest(state):
+         },
+     )
+ 
+-    vs = get_vectorstore()
++    # Store in the SEPARATE synthesized collection — never the authoritative one.
++    vs = get_synthesized_vectorstore()
+     vs.add_documents([doc])
+ 
+     logger.info(
+diff --git a/tests/test_graph_nodes.py b/tests/test_graph_nodes.py
+index e1445fc..eac2d0e 100644
+--- a/tests/test_graph_nodes.py
++++ b/tests/test_graph_nodes.py
+@@ -114,9 +114,10 @@ class TestRetrieveContext:
+         assert result["sources"] == ["doc.pdf"]
+         assert result["best_score"] == 0.2
+ 
++    @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")
+     @patch("graph.nodes.retrieve_context.get_vectorstore")
+     @patch("graph.nodes.retrieve_context.get_settings")
+-    def test_learning_mode_returns_low_score_docs(self, mock_settings, mock_get_vs):
++    def test_learning_mode_returns_low_score_docs(self, mock_settings, mock_get_vs, mock_get_synth):
+         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
+         vs = MagicMock()
+         vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.15)]
+@@ -125,6 +126,10 @@ class TestRetrieveContext:
+         doc1.metadata = {"source": "doc.pdf"}
+         vs.similarity_search.return_value = [doc1]
+         mock_get_vs.return_value = vs
++        # No previously synthesized answers for this question.
++        synth = MagicMock()
++        synth.similarity_search.return_value = []
++        mock_get_synth.return_value = synth
+ 
+         result = retrieve_context({"question": "test", "chat_mode": "learning"})
+         assert result["docs"] == "partial match"
+@@ -340,21 +345,21 @@ class TestSummarize:
+ 
+ class TestSelfIngest:
+     @patch("graph.nodes.self_ingest.get_settings")
+-    @patch("graph.nodes.self_ingest.get_vectorstore")
++    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
+     def test_strict_mode_skips_ingest(self, mock_get_vs, mock_settings):
+         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
+         result = self_ingest({"chat_mode": "strict", "best_score": 0.1, "last_answer": "Short", "question": "test"})
+         assert result == {"self_ingested": False}
+ 
+     @patch("graph.nodes.self_ingest.get_settings")
+-    @patch("graph.nodes.self_ingest.get_vectorstore")
++    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
+     def test_open_mode_skips_ingest(self, mock_get_vs, mock_settings):
+         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
+         result = self_ingest({"chat_mode": "open", "best_score": 0.1, "last_answer": "Short", "question": "test"})
+         assert result == {"self_ingested": False}
+ 
+     @patch("graph.nodes.self_ingest.get_settings")
+-    @patch("graph.nodes.self_ingest.get_vectorstore")
++    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
+     def test_learning_mode_skips_when_docs_found(self, mock_get_vs, mock_settings):
+         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
+         result = self_ingest(
+@@ -363,7 +368,7 @@ class TestSelfIngest:
+         assert result == {"self_ingested": False}
+ 
+     @patch("graph.nodes.self_ingest.get_settings")
+-    @patch("graph.nodes.self_ingest.get_vectorstore")
++    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
+     def test_learning_mode_skips_short_answers(self, mock_get_vs, mock_settings):
+         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
+         result = self_ingest(
+@@ -373,7 +378,7 @@ class TestSelfIngest:
+         mock_get_vs.assert_not_called()
+ 
+     @patch("graph.nodes.self_ingest.get_settings")
+-    @patch("graph.nodes.self_ingest.get_vectorstore")
++    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
+     def test_learning_mode_ingests_substantive_gap_filling_answers(self, mock_get_vs, mock_settings):
+         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
+         mock_vs = MagicMock()
+diff --git a/tests/test_synthesized_isolation.py b/tests/test_synthesized_isolation.py
+new file mode 100644
+index 0000000..db3d3bf
+--- /dev/null
++++ b/tests/test_synthesized_isolation.py
+@@ -0,0 +1,81 @@
++"""Regression tests for M-5: self-ingested (synthesized) content isolation.
++
++Synthesized answers must live in a SEPARATE Chroma collection and must only
++influence retrieval in learning mode — never in strict/open.
++"""
++
++from unittest.mock import MagicMock, patch
++
++from graph.nodes.retrieve_context import retrieve_context
++
++
++class TestSeparateCollection:
++    @patch("db.vector.get_embeddings")
++    @patch("db.vector.Chroma")
++    @patch("db.vector.get_settings")
++    def test_authoritative_and_synthesized_use_different_collections(self, mock_settings, mock_chroma, _embed):
++        from db.vector import get_synthesized_vectorstore, get_vectorstore
++
++        mock_settings.return_value = MagicMock(
++            chroma_collection="policies",
++            synthesized_collection="synthesized_answers",
++            chroma_persist_dir="./chroma_db",
++        )
++
++        get_vectorstore()
++        assert mock_chroma.call_args.kwargs["collection_name"] == "policies"
++
++        get_synthesized_vectorstore()
++        assert mock_chroma.call_args.kwargs["collection_name"] == "synthesized_answers"
++
++
++class TestRetrievalIsolation:
++    def _vs_below_threshold(self, weak_doc):
++        vs = MagicMock()
++        vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.1)]
++        vs.similarity_search.return_value = [weak_doc]
++        return vs
++
++    @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")
++    @patch("graph.nodes.retrieve_context.get_vectorstore")
++    @patch("graph.nodes.retrieve_context.get_settings")
++    def test_learning_mode_includes_synthesized(self, mock_settings, mock_get_vs, mock_get_synth):
++        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
++        weak = MagicMock(page_content="weak authoritative", metadata={"source_file": "policy.pdf"})
++        mock_get_vs.return_value = self._vs_below_threshold(weak)
++
++        synth_doc = MagicMock(page_content="previously synthesized", metadata={"source": "synthesized:abc"})
++        synth = MagicMock()
++        synth.similarity_search.return_value = [synth_doc]
++        mock_get_synth.return_value = synth
++
++        result = retrieve_context({"question": "q", "chat_mode": "learning"})
++        assert "previously synthesized" in result["docs"]
++        assert "synthesized:abc" in result["sources"]
++        synth.similarity_search.assert_called_once()
++
++    @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")
++    @patch("graph.nodes.retrieve_context.get_vectorstore")
++    @patch("graph.nodes.retrieve_context.get_settings")
++    def test_open_mode_never_touches_synthesized(self, mock_settings, mock_get_vs, mock_get_synth):
++        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
++        weak = MagicMock(page_content="weak authoritative", metadata={"source_file": "policy.pdf"})
++        mock_get_vs.return_value = self._vs_below_threshold(weak)
++
++        result = retrieve_context({"question": "q", "chat_mode": "open"})
++        assert result["docs"] == "weak authoritative"
++        # Open mode must not consult the synthesized store at all.
++        mock_get_synth.assert_not_called()
++
++    @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")
++    @patch("graph.nodes.retrieve_context.get_vectorstore")
++    @patch("graph.nodes.retrieve_context.get_settings")
++    def test_strict_mode_never_touches_synthesized(self, mock_settings, mock_get_vs, mock_get_synth):
++        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
++        vs = MagicMock()
++        vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.1)]
++        mock_get_vs.return_value = vs
++
++        result = retrieve_context({"question": "q", "chat_mode": "strict"})
++        assert result == {"docs": "", "sources": [], "best_score": 0.1}
++        mock_get_synth.assert_not_called()

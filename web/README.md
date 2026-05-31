@@ -34,6 +34,15 @@ bun run typecheck
 
 Conversation memory is scoped by a stable per-browser `X-User-Id` (localStorage).
 
+## Roadmap
+
+This v1 client is a clean MVP. [`UX_SPEC.md`](UX_SPEC.md) is the proposal for a v2 — a
+trust-first, mode/language-fluid experience adapted to this RAG knowledge assistant
+(confidence badges, citation cards, strict-refusal → "answer in open mode", markdown
+buffering + virtualization, deferred screen-reader announcements, and more). It marks each
+item frontend-only vs full-stack and deliberately deprioritizes Generative UI for this
+product.
+
 ## Notes
 - Plain CSS (no UI framework) keeps the visual budget tight: one accent color, two
   surface shades, spacing over borders.
