@@ -203,6 +203,48 @@ class TestGenerateAnswer:
         assert "Arabic" in prompt_arg
 
     @patch("graph.nodes.generate_answer._get_chat")
+    def test_generates_answer_in_portuguese_when_detected(self, mock_get_chat):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content="Resposta em português")
+        mock_get_chat.return_value = mock_llm
+
+        result = generate_answer(
+            {
+                "user_id": "u1",
+                "question": "Qual é a política de devoluções?",
+                "messages": [],
+                "docs": "",
+                "summary": "",
+                "chat_mode": "strict",
+            }
+        )
+
+        assert result["messages"][1].content == "Resposta em português"
+        assert result["lang"] == "European Portuguese"
+        prompt_arg = mock_llm.invoke.call_args[0][0]
+        assert "European Portuguese" in prompt_arg
+
+    @patch("graph.nodes.generate_answer._get_chat")
+    def test_lang_override_forces_portuguese(self, mock_get_chat):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(content="Resposta")
+        mock_get_chat.return_value = mock_llm
+
+        result = generate_answer(
+            {
+                "user_id": "u1",
+                "question": "What is the return policy?",
+                "messages": [],
+                "docs": "",
+                "summary": "",
+                "chat_mode": "strict",
+                "lang": "pt",
+            }
+        )
+
+        assert result["lang"] == "European Portuguese"
+
+    @patch("graph.nodes.generate_answer._get_chat")
     def test_open_mode_prompt_contains_general_knowledge_rule(self, mock_get_chat):
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = MagicMock(content="Open answer")
@@ -395,7 +437,8 @@ class TestSelfIngest:
 
     @patch("graph.nodes.self_ingest.get_settings")
     @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
-    def test_learning_mode_ingests_substantive_gap_filling_answers(self, mock_get_vs, mock_settings):
+    def test_learning_mode_embeds_directly(self, mock_get_vs, mock_settings):
+        # `learning` embeds the synthesized answer immediately.
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
         mock_vs = MagicMock()
         mock_get_vs.return_value = mock_vs
@@ -408,9 +451,42 @@ class TestSelfIngest:
                 "question": "What is AI?",
             }
         )
-        assert result == {"self_ingested": True}
+        assert result == {"self_ingested": True, "pending_review": False}
         mock_vs.add_documents.assert_called_once()
         added_doc = mock_vs.add_documents.call_args[0][0][0]
         assert added_doc.metadata["source_type"] == "synthesized"
         assert added_doc.metadata["source_question"] == "What is AI?"
         assert added_doc.metadata["best_score"] == 0.1
+
+    @patch("graph.nodes.self_ingest.get_settings")
+    @patch("graph.nodes.self_ingest.get_synthesized_vectorstore")
+    @patch("graph.nodes.self_ingest.enqueue")
+    def test_learning_review_mode_queues_for_review(self, mock_enqueue, mock_get_vs, mock_settings):
+        # `learning_review` queues for human review, does NOT embed.
+        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
+        mock_enqueue.return_value = "synthesized:deadbeef0000"
+
+        result = self_ingest(
+            {
+                "chat_mode": "learning_review",
+                "best_score": 0.1,
+                "last_answer": "AI is the simulation of human intelligence by machines.",
+                "question": "What is AI?",
+            }
+        )
+        assert result["self_ingested"] is True
+        assert result["pending_review"] is True
+        assert result["review_entry_id"] == "synthesized:deadbeef0000"
+        mock_enqueue.assert_called_once()
+        mock_get_vs.return_value.add_documents.assert_not_called()
+
+    @patch("graph.nodes.self_ingest.get_settings")
+    @patch("graph.nodes.self_ingest.enqueue")
+    def test_learning_review_mode_skips_when_docs_found(self, mock_enqueue, mock_settings):
+        # The gap-filling gate applies to learning_review too: docs found → no queue.
+        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, self_ingest_min_length=50)
+        result = self_ingest(
+            {"chat_mode": "learning_review", "best_score": 0.9, "last_answer": "x" * 80, "question": "q"}
+        )
+        assert result == {"self_ingested": False}
+        mock_enqueue.assert_not_called()

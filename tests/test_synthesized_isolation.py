@@ -57,6 +57,24 @@ class TestRetrievalIsolation:
     @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
+    def test_learning_review_mode_includes_synthesized(self, mock_settings, mock_get_vs, mock_get_synth):
+        # learning_review must also draw on approved synthesized answers, like learning.
+        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
+        weak = MagicMock(page_content="weak authoritative", metadata={"source_file": "policy.pdf"})
+        mock_get_vs.return_value = self._vs_below_threshold(weak)
+
+        synth_doc = MagicMock(page_content="previously synthesized", metadata={"source": "synthesized:abc"})
+        synth = MagicMock()
+        synth.similarity_search.return_value = [synth_doc]
+        mock_get_synth.return_value = synth
+
+        result = retrieve_context({"question": "q", "chat_mode": "learning_review"})
+        assert "previously synthesized" in result["docs"]
+        synth.similarity_search.assert_called_once()
+
+    @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")
+    @patch("graph.nodes.retrieve_context.get_vectorstore")
+    @patch("graph.nodes.retrieve_context.get_settings")
     def test_open_mode_never_touches_synthesized(self, mock_settings, mock_get_vs, mock_get_synth):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
         weak = MagicMock(page_content="weak authoritative", metadata={"source_file": "policy.pdf"})

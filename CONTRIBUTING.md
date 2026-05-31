@@ -191,10 +191,10 @@ Contributions to both the upstream and this fork are welcome. If you want your c
 
 ## Good First Contributions
 
-- Add a new document loader (DOCX, TXT, HTML) in `ingest/`
-- Add a two-phase review workflow for learning mode synthesized entries
-- Add Guardrails integration
-- Add RAGAS evaluation framework
+- Add a new document format (e.g. CSV, EPUB, PPTX) to the loader registry in `ingest/loaders.py`
+- Add a reviewer UI in `web/` for the learning-mode review queue (`/api/v1/review/*`)
+- Expand the guardrail patterns (`guardrails/`) — more injection signatures or output checks
+- Grow the RAGAS golden set (`eval/golden.jsonl`) or add a scheduled (non-PR) eval CI job
 - Add a new FastEmbed model to the registry in `utils/embedding_adapter.py`
 - Improve test coverage for ingest controller endpoints
 - Add OpenTelemetry tracing (currently using correlation IDs only)

@@ -1,5 +1,5 @@
-export type Mode = "strict" | "open" | "learning";
-export type Lang = "auto" | "en" | "ar";
+export type Mode = "strict" | "open" | "learning" | "learning_review";
+export type Lang = "auto" | "en" | "ar" | "pt";
 
 export interface Source {
   label: string;

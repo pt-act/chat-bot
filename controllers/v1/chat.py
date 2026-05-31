@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from config import get_settings
 from controllers.chat_controller import _validate_user_id
+from guardrails import GuardrailViolation
 from middlewares.observability import correlation_id_var
 from schemas.chat import ChatRequest
 from schemas.responses import ChatMeta, ChatResponse, Source
@@ -99,6 +100,9 @@ def chat_stream(request: ChatRequest, x_user_id: str = Header(default="anonymous
                 if event == "done":
                     data["meta"]["correlation_id"] = correlation_id_var.get() or None
                 yield _sse(event, data)
+        except GuardrailViolation as e:
+            logger.warning("Streaming chat blocked by guardrail for user %s: %s", user_id, e)
+            yield _sse("error", {"title": str(e), "status": 400, "reason": e.reason})
         except Exception:
             logger.exception("Streaming chat failed for user %s", user_id)
             yield _sse("error", {"title": "Internal server error", "status": 500})

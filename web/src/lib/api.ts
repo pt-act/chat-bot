@@ -103,6 +103,47 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): void {
   }
 }
 
+export interface UploadResult {
+  doc_id: string;
+  status: string;
+}
+
+/**
+ * Upload a local PDF to POST /api/v1/ingest/upload (multipart/form-data).
+ *
+ * The document is sent straight from the user's machine — no URL, nothing leaves
+ * their environment except the file itself. Returns the queued ingest result, or
+ * throws with a human-readable message on failure.
+ */
+export async function uploadDocument(file: File, userId: string): Promise<UploadResult> {
+  const form = new FormData();
+  form.append("file", file);
+
+  let resp: Response;
+  try {
+    // Note: do NOT set Content-Type — the browser adds the multipart boundary.
+    resp = await fetch("/api/v1/ingest/upload", {
+      method: "POST",
+      headers: { "X-User-Id": userId },
+      body: form,
+    });
+  } catch {
+    throw new Error("Network error — could not reach the server.");
+  }
+
+  if (!resp.ok) {
+    let detail = `Upload failed (${resp.status}).`;
+    try {
+      const body = await resp.json();
+      detail = body.detail || body.title || detail;
+    } catch {
+      // non-JSON error body; keep the generic message
+    }
+    throw new Error(detail);
+  }
+  return (await resp.json()) as UploadResult;
+}
+
 export interface Health {
   status: string;
   dependencies: Record<string, string>;

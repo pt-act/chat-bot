@@ -1,6 +1,6 @@
 import logging
 
-from config import get_settings
+from config import LEARNING_MODES, get_settings
 from db.vector import get_synthesized_vectorstore, get_vectorstore
 
 logger = logging.getLogger(__name__)
@@ -97,9 +97,9 @@ def retrieve_context(state):
     # Open/learning mode with low scores: provide best available matches (may be weak)
     if chat_mode != "strict" and best_score < threshold:
         docs = vs.similarity_search(question, k=top_k)
-        # Learning mode additionally draws on previously synthesized answers, which
+        # Learning modes additionally draw on previously synthesized answers, which
         # live in a separate collection. Strict/open never see synthesized content.
-        if chat_mode == "learning":
+        if chat_mode in LEARNING_MODES:
             docs = docs + _search_synthesized(question, k=top_k)
         context = "\n\n".join(d.page_content for d in docs) if docs else ""
         sources = _dedup([_to_source(d, score_map.get(_score_key(d))) for d in docs])

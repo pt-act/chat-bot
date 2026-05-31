@@ -6,7 +6,6 @@ import tempfile
 from datetime import datetime, timezone
 
 import requests
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -14,6 +13,7 @@ from config import get_settings
 from db.redis_client import get_redis
 from db.vector import VectorStoreRepository, get_vectorstore
 from ingest.keys import ALL_DOCS_KEY, CONTENT_HASHES_KEY, doc_chunks_key, ingest_status_key
+from ingest.loaders import detect_extension, load_documents
 from utils.security import SSRFError, validate_download_url
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def _clean_text(text: str) -> str:
     return text.strip()
 
 
-def _download_file(s3_url: str, file_name: str) -> str:
+def _download_file(s3_url: str, ext: str) -> str:
     setting = get_settings()
     max_bytes = setting.max_file_size_mb * 1024 * 1024
 
@@ -59,7 +59,7 @@ def _download_file(s3_url: str, file_name: str) -> str:
     except requests.RequestException as e:
         raise RuntimeError(f"Failed to download {s3_url}: {e}") from e
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp = tempfile.NamedTemporaryFile(suffix=ext or ".bin", delete=False)
     size = 0
     with tmp:
         for chunk in response.iter_content(chunk_size=8192):
@@ -83,9 +83,9 @@ def _check_duplicate_content(redis_client, new_file_hash: str, doc_id: str) -> d
 
 
 def _build_chunks(
-    file_path: str, doc_id: str, file_name: str, new_file_hash: str, version: str
+    file_path: str, doc_id: str, file_name: str, new_file_hash: str, version: str, ext: str
 ) -> tuple[list[Document], set[str]]:
-    pages = PyPDFLoader(file_path).load()
+    pages = load_documents(file_path, ext)
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800, chunk_overlap=100, separators=["\n\n", "\n", ".", " ", ""]
     )
@@ -188,76 +188,109 @@ def _persist_ingest_status(
     )
 
 
+def _run_ingest(redis_client, doc_id: str, file_name: str, file_path: str, ext: str) -> dict:
+    """Hash → dedup → chunk → sync → persist for an already-local file path.
+
+    Shared by both the URL (`process_policy`) and upload (`process_uploaded`) paths.
+    ``ext`` selects the document loader (see ingest.loaders).
+    """
+    new_file_hash = _file_hash(file_path)
+    stored_file_hash = redis_client.hget(ingest_status_key(doc_id), "file_hash")
+
+    if stored_file_hash == new_file_hash:
+        logger.info("Skipping %s — file unchanged", doc_id)
+        return {"doc_id": doc_id, "status": "skipped", "reason": "file unchanged"}
+
+    dup_result = _check_duplicate_content(redis_client, new_file_hash, doc_id)
+    if dup_result:
+        logger.info("Skipping %s — duplicate content", doc_id)
+        return dup_result
+
+    version = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_chunks, new_hashes = _build_chunks(file_path, doc_id, file_name, new_file_hash, version, ext)
+
+    repo = VectorStoreRepository(get_vectorstore())
+    old_hashes = redis_client.smembers(doc_chunks_key(doc_id))
+
+    added, removed = _sync_vectorstore(repo, redis_client, doc_id, new_chunks, new_hashes, old_hashes)
+
+    _persist_ingest_status(
+        redis_client,
+        doc_id,
+        new_file_hash,
+        stored_file_hash,
+        new_hashes,
+        added,
+        removed,
+        len(new_chunks),
+        version,
+        file_name,
+    )
+
+    logger.info("Ingested %s — added=%d removed=%d total=%d", doc_id, added, removed, len(new_chunks))
+
+    return {
+        "doc_id": doc_id,
+        "status": "done",
+        "version": version,
+        "added": added,
+        "removed": removed,
+        "total": len(new_chunks),
+    }
+
+
+def _mark_failed(redis_client, doc_id: str, error: Exception) -> None:
+    redis_client.hset(
+        ingest_status_key(doc_id),
+        mapping={
+            "status": "failed",
+            "error": str(error),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
 def process_policy(file_name: str, s3_url: str) -> dict:
-    # NOTE: use removesuffix, NOT rstrip — str.rstrip(".pdf") strips any trailing
-    # combination of the characters {'.', 'p', 'd', 'f'}, so "app.pdf" -> "a".
-    doc_id = file_name.removesuffix(".pdf")
+    """Ingest a document fetched from a remote URL (SSRF-guarded).
+
+    The format is inferred from the URL's extension (see ingest.loaders).
+    """
+    doc_id = file_name
     redis_client = get_redis()
+    ext = detect_extension(s3_url)
     file_path = None
 
     try:
-        logger.info("Downloading %s", file_name)
-        file_path = _download_file(s3_url, file_name)
-
-        new_file_hash = _file_hash(file_path)
-        stored_file_hash = redis_client.hget(ingest_status_key(doc_id), "file_hash")
-
-        if stored_file_hash == new_file_hash:
-            logger.info("Skipping %s — file unchanged", doc_id)
-            return {"doc_id": doc_id, "status": "skipped", "reason": "file unchanged"}
-
-        dup_result = _check_duplicate_content(redis_client, new_file_hash, doc_id)
-        if dup_result:
-            logger.info("Skipping %s — duplicate content", doc_id)
-            return dup_result
-
-        version = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        new_chunks, new_hashes = _build_chunks(file_path, doc_id, file_name, new_file_hash, version)
-
-        repo = VectorStoreRepository(get_vectorstore())
-        old_hashes = redis_client.smembers(doc_chunks_key(doc_id))
-
-        added, removed = _sync_vectorstore(repo, redis_client, doc_id, new_chunks, new_hashes, old_hashes)
-
-        _persist_ingest_status(
-            redis_client,
-            doc_id,
-            new_file_hash,
-            stored_file_hash,
-            new_hashes,
-            added,
-            removed,
-            len(new_chunks),
-            version,
-            file_name,
-        )
-
-        logger.info("Ingested %s — added=%d removed=%d total=%d", doc_id, added, removed, len(new_chunks))
-
-        return {
-            "doc_id": doc_id,
-            "status": "done",
-            "version": version,
-            "added": added,
-            "removed": removed,
-            "total": len(new_chunks),
-        }
-
+        logger.info("Downloading %s (%s)", file_name, ext or "unknown format")
+        file_path = _download_file(s3_url, ext)
+        return _run_ingest(redis_client, doc_id, file_name, file_path, ext)
     except SSRFError as e:
         logger.warning("SSRF blocked for %s: %s", doc_id, e)
         raise
     except Exception as e:
-        redis_client.hset(
-            ingest_status_key(doc_id),
-            mapping={
-                "status": "failed",
-                "error": str(e),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+        _mark_failed(redis_client, doc_id, e)
         logger.exception("Ingest failed for %s", doc_id)
         raise
+    finally:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
 
+
+def process_uploaded(file_name: str, file_path: str, ext: str) -> dict:
+    """Ingest a document already saved locally (e.g. an uploaded file).
+
+    No download/SSRF step — the bytes are local. ``ext`` selects the loader. The caller
+    owns creating ``file_path``; this function removes it when done (success or failure).
+    """
+    doc_id = file_name
+    redis_client = get_redis()
+    try:
+        logger.info("Processing uploaded document %s (%s)", file_name, ext)
+        return _run_ingest(redis_client, doc_id, file_name, file_path, ext)
+    except Exception as e:
+        _mark_failed(redis_client, doc_id, e)
+        logger.exception("Ingest failed for uploaded %s", doc_id)
+        raise
     finally:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)

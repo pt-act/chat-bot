@@ -127,11 +127,12 @@ class TestIngestEndpoint:
             )
             assert resp.status_code == 422
 
-    def test_ingest_non_pdf_url_rejected(self):
+    def test_ingest_unsupported_url_format_rejected(self):
+        # .txt/.docx/.html are now supported; an unsupported format (.exe) is still rejected.
         with _make_app() as client:
             resp = client.post(
                 "/api/ingest",
-                json={"file_name": "test", "s3_url": "https://bucket.s3.amazonaws.com/test.txt"},
+                json={"file_name": "test", "s3_url": "https://bucket.s3.amazonaws.com/test.exe"},
             )
             assert resp.status_code == 422
 

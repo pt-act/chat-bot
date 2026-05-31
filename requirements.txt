@@ -1,5 +1,6 @@
 fastapi==0.136.1
 uvicorn[standard]==0.46.0
+python-multipart==0.0.20  # required by FastAPI for multipart/form-data (file uploads)
 
 pydantic==2.13.2
 pydantic-settings==2.14.1
@@ -22,8 +23,11 @@ langchain-community==0.4.1
 langchain-chroma==1.1.0
 
 tiktoken==0.12.0
+lingua-language-detector==2.1.1  # statistical EN/PT fallback for short, unaccented inputs
 python-json-logger==2.0.7
 fastembed==0.8.0
 pillow>=12.2.0  # fastembed dependency — pinned to avoid CVEs in <12.2.0
 
 pypdf==6.11.0
+docx2txt==0.9          # .docx text extraction (lightweight, pure-Python)
+beautifulsoup4==4.14.2  # .html/.htm text extraction (uses the stdlib html.parser)

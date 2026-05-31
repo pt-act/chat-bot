@@ -1,0 +1,5 @@
+# Optional dependencies for the offline RAGAS evaluation harness (eval/run_ragas.py).
+# Not installed in CI or the runtime image — RAGAS judges answers with an LLM and is
+# non-deterministic, so it is run manually. See eval/README.md.
+ragas>=0.1,<0.2
+datasets>=2.16

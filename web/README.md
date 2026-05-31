@@ -25,7 +25,9 @@ bun run typecheck
 
 - **Streaming chat** — `POST /api/v1/chat/stream` parsed as Server-Sent Events
   (`token` → `sources` → `done`); Stop aborts the request mid-stream.
-- **Controls** — per-request `mode` (strict/open/learning) and `lang` (auto/en/ar).
+- **Controls** — per-request `mode` (strict/open/learning/learning_review) and `lang` (auto/en/ar/pt).
+- **Upload PDF** — pick a local PDF and `POST /api/v1/ingest/upload` (multipart); the file
+  goes straight from the browser, no hosting/URL required.
 - **Citations** — collapsible Sources with label, page, relevance score, and snippet.
 - **RTL** — Arabic messages render `dir="rtl"` via logical CSS properties.
 - **A11y** — `aria-live` on the streaming answer, keyboard send (Enter) / Shift+Enter

@@ -66,14 +66,15 @@ class TestSourceResolution:
         assert _source_label(doc) == "unknown"
 
 
-# ── Finding: doc_id derivation used str.rstrip(".pdf") (strips a char set) ───────
-class TestDocIdSuffixStripping:
+# ── doc_id derivation ────────────────────────────────────────────────────────────
+# `file_name` is validated dot-free (schemas.ingest.clean_file_name) and used as the
+# doc_id verbatim; the document format is inferred from the URL extension, separately.
+class TestDocId:
     @resp.activate
-    def test_pdf_suffix_removed_without_eating_filename_chars(self, pdf_v1_bytes, ingest_env):
-        # "app.pdf" -> rstrip(".pdf") == "a" (bug); removesuffix -> "app" (fixed).
+    def test_doc_id_is_file_name_verbatim(self, pdf_v1_bytes, ingest_env):
         url = "https://test-bucket.s3.amazonaws.com/app.pdf"
         resp.add(resp.GET, url, body=pdf_v1_bytes, status=200)
-        result = process_policy("app.pdf", url)
+        result = process_policy("app", url)
         assert result["doc_id"] == "app"
 
 

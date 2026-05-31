@@ -55,11 +55,9 @@ This project is a **production-grade AI chatbot backend** built using:
 
 It supports:
 
-* 3 chat modes: strict (knowledge-base-only), open (general knowledge), learning (auto-growing KB)
-* Self-ingestion: synthesized answers auto-saved to ChromaDB in learning mode
 * Conversational memory with summarization
-* Document-based Q&A (RAG)
-* Three chat modes: strict (knowledge-base-only), open (free interaction), learning (auto-growing KB)
+* Document-based Q&A (RAG) — ingest PDF / TXT / Markdown / DOCX / HTML, from a URL or by uploading a local file (privacy-friendly)
+* Four chat modes: strict (knowledge-base-only), open (free interaction), learning (auto-growing KB), learning_review (KB growth gated by human review)
 * 14 LLM providers (OpenAI, Anthropic, Google, Groq, Ollama, DeepSeek, Together, Mistral, Fireworks, OpenRouter, vLLM, LM Studio, llama.cpp)
 * 7+ embedding models via FastEmbed (ONNX-based, zero CVEs)
 * Self-ingestion in learning mode — auto-saves synthesized answers with provenance metadata
@@ -68,7 +66,7 @@ It supports:
 * Proxy-aware rate limiting (X-Forwarded-For handling with CIDR trust)
 * Structured JSON logging with correlation ID tracing
 * Fully local deployment with Ollama (zero cloud API keys)
-* Multilingual responses (Arabic / English)
+* Multilingual responses (Arabic / English / European Portuguese)
 * Kubernetes-ready health/ready probes
 * Scalable backend design
 
@@ -211,8 +209,13 @@ REDIS_PORT=6379
 
 RETRIEVAL_SCORE_THRESHOLD=0.3           # raise to 0.7 for stricter grounding
 
-CHAT_MODE=strict                        # strict | open | learning — see Chat Modes section
-SELF_INGEST_MIN_LENGTH=50               # minimum answer length for auto-ingest in learning mode
+CHAT_MODE=strict                        # strict | open | learning | learning_review — see Chat Modes section
+SELF_INGEST_MIN_LENGTH=50               # minimum answer length for auto-ingest in learning modes
+
+GUARDRAILS_ENABLED=true                 # input prompt-injection blocking + output guards
+GUARDRAILS_BLOCK_INJECTION=true         # reject likely prompt-injection / jailbreak inputs (400)
+GUARDRAILS_MASK_PII=false               # mask emails/phone/card-like numbers in output
+GUARDRAILS_MAX_ANSWER_CHARS=4000        # hard cap on answer length (0 disables)
 ```
 
 See [.env.example](.env.example) for the full list of options.
@@ -375,14 +378,37 @@ On `/api/v1`, ingestion is **asynchronous**: the request returns `202 Accepted` 
 `status=queued` and a `Location` header, then processes in the background — poll the
 status endpoint for progress. (Legacy `/api/ingest` remains synchronous.)
 
-### Queue a document
+**Supported formats:** PDF, TXT, Markdown (`.md`/`.markdown`), DOCX, HTML (`.html`/`.htm`).
+The format is inferred from the file/URL extension and dispatched to the matching loader
+(`ingest/loaders.py`) — adding another format is a one-line entry there.
+
+### Queue a document (from a URL)
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/ingest" \
   -H "Content-Type: application/json" \
-  -d '{"file_name": "terms_conditions", "s3_url": "https://your-s3-url.pdf"}'
-# → 202  {"doc_id": "terms_conditions", "status": "queued"}
+  -d '{"file_name": "terms_conditions", "s3_url": "https://your-host/terms.pdf"}'
+# → 202  {"doc_id": "terms_conditions", "status": "queued"}   # .pdf/.txt/.md/.docx/.html
 ```
+
+### Upload a local document (no URL — privacy-friendly)
+
+For a fully local / on-prem setup, push a file straight from your machine — it never has
+to be hosted anywhere. Pair with FastEmbed + Ollama for a zero-cloud pipeline.
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/ingest/upload" \
+  -F "file=@/path/to/return_policy.pdf"          # or .txt, .md, .docx, .html
+# → 202  {"doc_id": "return_policy", "status": "queued"}
+
+# optional explicit doc id (otherwise derived + sanitized from the filename):
+curl -X POST "http://127.0.0.1:8000/api/v1/ingest/upload" \
+  -F "file=@./Q3 Report.docx" -F "file_name=q3_report"
+```
+
+> Multipart `file` must be a supported format (validated by extension; PDFs also get a
+> `%PDF` header check) and within `MAX_FILE_SIZE_MB`. Same async contract as URL ingest:
+> poll `GET /ingest/status/{doc_id}`. The web client exposes this as an **Upload doc** button.
 
 ### Check ingest status (poll)
 
@@ -407,25 +433,46 @@ curl -X DELETE http://127.0.0.1:8000/api/v1/ingest/terms_conditions
 > Ingest management endpoints honor API-key auth — `DELETE` always requires `X-API-Key`,
 > and the others require it when `REQUIRE_AUTH_FOR_INGEST=true`.
 
+### Review synthesized answers (learning-mode two-phase ingest)
+
+```bash
+# List entries awaiting review
+curl "http://127.0.0.1:8000/api/v1/review/pending?limit=50&cursor=0"
+# → {"total": N, "pending": [{"entry_id": "synthesized:…", "question": "…", "answer": "…", ...}], "next_cursor": null}
+
+# Approve → embeds into the synthesized_answers collection (retrievable in learning mode)
+curl -X POST http://127.0.0.1:8000/api/v1/review/synthesized:1a2b3c4d5e6f/approve
+
+# Reject → discards without embedding
+curl -X POST http://127.0.0.1:8000/api/v1/review/synthesized:1a2b3c4d5e6f/reject
+```
+
+> Review endpoints honor the same API-key dependency as ingest (gated by
+> `REQUIRE_AUTH_FOR_INGEST`). The queue is only populated when requests run in
+> `learning_review` mode.
+
 ## 💬 7. Chat API
 
 ### Chat Modes
 
-The system supports three interaction modes via `CHAT_MODE` in `.env`:
+The system supports four interaction modes via `CHAT_MODE` in `.env`:
 
 | Mode | Behavior | When no docs match | Self-ingest | Use case |
 |------|----------|--------------------|-------------|----------|
 | **strict** (default) | Knowledge-base-only | Refuses: "I don't have information..." | No | Legal, medical, regulated domains |
 | **open** | Free interaction | Uses general knowledge, honest about provenance | No | General assistants, brainstorming |
-| **learning** | Free interaction + growing KB | Synthesizes answer, auto-saves to ChromaDB | Yes (≥50 chars, no docs found) | Knowledge-building, research assistants |
+| **learning** | Free interaction + growing KB | Synthesizes answer, **embeds immediately** into ChromaDB | Yes (≥50 chars, no docs found) | Knowledge-building, research assistants |
+| **learning_review** | Same as learning, **human-gated** | Synthesizes answer, **queues for review** (not embedded) | Queued for approval (≥50 chars, no docs found) | Curated KB growth with a moderator in the loop |
 
-> **Learning mode quality gate:** Only auto-ingests responses when (1) no documents matched the question (filling a knowledge gap) and (2) the answer is ≥50 characters. Synthesized entries live in a **separate ChromaDB collection** (`synthesized_answers`) and are only consulted in `learning` mode — they never pollute `strict`/`open` retrieval.
+> **Learning quality gate:** Both learning modes only act on a response when (1) no documents matched the question (filling a knowledge gap) and (2) the answer is ≥50 characters. Synthesized entries live in a **separate ChromaDB collection** (`synthesized_answers`) consulted only in the learning modes — they never pollute `strict`/`open` retrieval.
+
+> **`learning` vs `learning_review` (two-phase ingest):** In `learning`, a passing answer is embedded into `synthesized_answers` immediately. In `learning_review`, it is instead **queued in Redis for human review** — a moderator lists entries (`GET /api/v1/review/pending`) and **approves** (embeds into `synthesized_answers`, making it retrievable) or **rejects** (discards). This keeps unverified model output out of the vector store until a human signs off.
 
 `CHAT_MODE` sets the server default; clients can override it **per request** (see below).
 
 ```env
 # In .env
-CHAT_MODE=strict    # or open, or learning
+CHAT_MODE=strict    # or open, learning, learning_review
 SELF_INGEST_MIN_LENGTH=50
 ```
 
@@ -450,7 +497,7 @@ Request (`q` required; the rest are optional per-request overrides):
 {
   "q": "what is the return policy?",
   "mode": "strict",        // strict | open | learning  (overrides server default)
-  "lang": "auto",          // auto | en | ar  (auto-detects Arabic vs English)
+  "lang": "auto",          // auto | en | ar | pt  (auto-detects Arabic/Portuguese vs English; pt = European Portuguese)
   "top_k": 3,              // 1..10 chunks to retrieve
   "score_threshold": 0.3   // 0..1 minimum relevance
 }
@@ -682,7 +729,7 @@ max_marginal_relevance_search k=3, fetch_k=10
 
 **Step 2 — MMR:** only runs when step 1 passes the threshold. Fetches 10 candidates and picks the 3 that are both relevant AND diverse — avoiding 3 near-identical paragraphs being sent to the LLM.
 
-**Step 3 — Self-ingest (learning mode only):** If the retrieval score was below threshold (knowledge gap) and the LLM's answer is ≥50 characters, the answer is auto-ingested into ChromaDB with `source_type=synthesized` metadata. This creates a growing knowledge base that fills gaps over time.
+**Step 3 — Self-ingest (learning modes only):** If the retrieval score was below threshold (knowledge gap) and the LLM's answer is ≥50 characters, the answer is captured with `source_type=synthesized` metadata. In `learning` mode it is embedded into the `synthesized_answers` collection immediately; in `learning_review` mode it is **queued for human review** instead, and only embedded once a moderator approves it (see [Chat Modes](#chat-modes) and the `/api/v1/review/*` endpoints). This grows the knowledge base — optionally with a human in the loop.
 
 **ChromaDB is configured with cosine distance** (`hnsw:space: cosine`) — the correct metric for text embeddings. Without this, scores are L2-based and can go negative, making the threshold meaningless.
 
@@ -694,10 +741,18 @@ Configurable via environment variables and chat mode:
 - `CHAT_MODE=strict` — Knowledge-base-only. Refuses outside topics.
 - `CHAT_MODE=open` — Free interaction. Uses general knowledge when no documents match.
 - `CHAT_MODE=learning` — Free interaction + auto-ingests synthesized answers into ChromaDB.
+- `CHAT_MODE=learning_review` — Like learning, but synthesized answers are queued for human approval (`/api/v1/review/*`) before being embedded.
 - Uses conversation summary (long-term memory)
 - Uses recent messages (short-term memory)
 - Uses retrieved context (RAG)
-- Generates final response in the user's language (Arabic / English)
+- Generates final response in the user's language (Arabic / English / European Portuguese)
+
+> **Language detection (`lang: "auto"`):** Arabic is detected by script. A fast,
+> dependency-free heuristic (distinctive Portuguese diacritics + a stopword-frequency
+> ratio) handles the vast majority of inputs; only short, unaccented, genuinely ambiguous
+> fragments fall through to the [lingua](https://github.com/pemistahl/lingua-py) EN/PT
+> statistical model. Selecting `pt` (or `en`/`ar`) explicitly bypasses detection entirely.
+> Portuguese output uses Portugal spelling/vocabulary (pt-PT).
 
 ## Security
 
@@ -766,8 +821,11 @@ Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL
 
 * ✅ Conversational memory (short + long-term via Redis)
 * ✅ RAG retrieval with mode-aware score gate + MMR diversity ranking
-* ✅ Three chat modes: strict (knowledge-base-only), open (general knowledge), learning (growing KB)
-* ✅ Self-ingest in learning mode — auto-saves synthesized answers to ChromaDB with provenance metadata
+* ✅ Four chat modes: strict (knowledge-base-only), open (general knowledge), learning (growing KB), learning_review (review-gated KB growth)
+* ✅ Self-ingest in learning mode — synthesized answers captured with provenance metadata
+* ✅ `learning_review` mode — two-phase ingest: synthesized answers queued for human approve/reject before embedding (`/api/v1/review/*`)
+* ✅ Guardrails — input prompt-injection/jailbreak blocking + output PII masking and length cap (config-toggleable)
+* ✅ RAGAS evaluation harness — offline faithfulness / relevancy / context precision+recall (`eval/`)
 * ✅ 14 LLM providers with universal OpenAI-compatible adapter + provider aliases
 * ✅ 7+ embedding models via FastEmbed (ONNX, ~50MB, zero CVEs) + model registry
 * ✅ API key authentication (FastAPI dependency injection) on destructive ingest endpoints
@@ -778,10 +836,12 @@ Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL
 * ✅ Kubernetes-ready — cached `/health` + live `/ready` probes with dependency-specific error details
 * ✅ Citations — every answer includes which source documents were used
 * ✅ Conversational follow-ups — context-aware replies when no document match exists
+* ✅ Multi-format ingestion — PDF, TXT, Markdown, DOCX, HTML via a pluggable loader registry (`ingest/loaders.py`)
+* ✅ Two ingest paths — remote URL pull **or** local file upload (multipart), so documents can stay on-prem / private
 * ✅ Incremental ingestion — only re-embeds changed chunks, not the whole document
 * ✅ Ingestion safeguards — duplicate submission protection, file size limits, status polling endpoint
 * ✅ Global duplicate detection — same PDF under different names caught via content hash
-* ✅ Multilingual responses (Arabic / English auto-detected)
+* ✅ Multilingual responses (Arabic / English / European Portuguese auto-detected)
 * ✅ LangGraph workflow orchestration (7-node pipeline)
 * ✅ FastAPI production API layer
 * ✅ Dockerized — cloud deployment (docker-compose.yml) + local deployment (docker-compose.local.yml with Ollama)
@@ -792,14 +852,14 @@ Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL
 
 * [x] Multi-provider LLM support (14 providers)
 * [x] FastEmbed local embeddings (7+ models, ONNX-based)
-* [x] Chat modes (strict, open, learning with self-ingest)
+* [x] Chat modes (strict, open, learning with self-ingest, learning_review with two-phase ingest)
 * [x] Local deployment (Ollama + FastEmbed, zero API keys)
 * [x] Provider comparison documentation
 * [x] CI/CD pipeline (ruff, bandit, pip-audit, coverage, Docker build)
 * [x] Security elevation (auth, SSRF, rate limiting, CORS, observability) — 72→95 audit score
-* [ ] Guardrails
-* [ ] Evaluation (RAGAS)
-* [ ] Learning mode review workflow (two-phase ingest for synthesized entries)
+* [x] Guardrails (input prompt-injection blocking + output PII masking / length cap)
+* [x] Evaluation (RAGAS) — offline harness (`eval/`)
+* [x] Learning mode review workflow (two-phase ingest for synthesized entries)
 
 ## ⚡ Tech Stack
 
@@ -826,8 +886,8 @@ pytest  # 120+ tests, 97% coverage
 
 **Good first contributions:**
 - Add a new document loader (DOCX, TXT, HTML) in `ingest/`
-- Add a two-phase review workflow for learning mode synthesized entries
-- Add Guardrails or RAGAS evaluation (see TODO)
+- Expand the guardrail patterns (`guardrails/`) or the RAGAS golden set (`eval/golden.jsonl`)
+- Add a reviewer UI in `web/` for the learning-mode review queue (`/api/v1/review/*`)
 - Add a new FastEmbed model to the registry in `utils/embedding_adapter.py`
 
 > Please open an issue before starting large changes so we can discuss approach first.
@@ -853,7 +913,7 @@ This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-
 | Dimension | Upstream (v1.0.0) | This Fork (v2.0.0) |
 |-----------|--------------------|---------------------|
 | LLM providers | 3 (OpenAI, Anthropic, Groq) | 14 (universal adapter) |
-| Chat modes | 1 (strict only) | 3 (strict, open, learning) |
+| Chat modes | 1 (strict only) | 4 (strict, open, learning, learning_review) |
 | Self-ingestion | None | Learning mode with quality gate |
 | Authentication | None | API key (FastAPI DI) |
 | SSRF protection | None | Private IP + metadata blocking |
