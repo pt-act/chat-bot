@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab0f11  # v5.5.0
+        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55  # v5.5.0
         with:
           python-version: "3.10"
 
@@ -31,7 +31,10 @@ jobs:
         run: bandit -r . -ll -ii -x ./tests/
 
       - name: pip-audit (requirements.txt)
-        run: pip-audit -r requirements.txt --desc --format=json | tee pip-audit-results.json
+        # Ignore CVE-2026-45829 (chromadb): pre-auth RCE in Chroma *server* mode; we use
+        # Chroma embedded (non-server), and there is no upstream-fixed release yet. Tracked
+        # in CHANGELOG/PTD limitations — REMOVE this ignore once a patched chromadb ships.
+        run: pip-audit -r requirements.txt --desc --format=json --ignore-vuln CVE-2026-45829 | tee pip-audit-results.json
         continue-on-error: false
 
       - name: Upload pip-audit results
@@ -47,7 +50,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab0f11  # v5.5.0
+        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55  # v5.5.0
         with:
           python-version: "3.10"
 
@@ -95,7 +98,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab0f11  # v5.5.0
+        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55  # v5.5.0
         with:
           python-version: "3.10"
 
