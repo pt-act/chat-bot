@@ -266,11 +266,30 @@ GitHub Actions (`.github/workflows/ci.yml`), pinned action SHAs:
 
 ## 16. Known limitations / roadmap
 
+- **Retrieval quality is not validated against a live corpus.** The test suite is hermetic
+  — ChromaDB and embeddings are mocked. Unit/contract tests verify *that* MMR is invoked
+  and *that* citation scores are joined, but they do **not** measure real retrieval
+  relevance or MMR diversity on actual documents. A live evaluation (e.g. RAGAS, or manual
+  spot-checks against your corpus) is recommended before relying on answer quality, and
+  after any change to chunking, `top_k`, `fetch_k`, or the embedding model.
 - **`chromadb 1.5.9` / CVE-2026-45829** (pre-auth RCE) — no upstream fix yet; mitigated by
   embedded (non-server) use. Track and upgrade when patched; never expose the Chroma
   server API on the network.
-- **No `/chat` authentication** by default (identity is scoped, not authenticated).
-- **In-process async ingest** — move to a worker/broker for durability and horizontal
-  scale.
-- **`retrieve_context` complexity** is creeping (CC ~14) — candidate for a small refactor.
-- See [`README.md`](README.md) → Roadmap for the broader TODO list.
+- **No `/chat` authentication** by default (identity is scoped/validated, not
+  authenticated). Gate behind auth if conversation memory is sensitive.
+- **SSRF guard has a TOCTOU window.** `validate_download_url` resolves DNS at check time;
+  the subsequent request resolves again and could differ. Combined with
+  `allow_redirects=False` this is a strong mitigation, not airtight — pinning the validated
+  IP for the connection would close it.
+- **Rate limiter fails open.** If Redis is unavailable, requests are allowed (availability
+  over enforcement). Pair with alerting on Redis loss; the open window is otherwise silent.
+- **MMR tuning is defaulted.** `fetch_k = max(10, top_k*4)` and LangChain's `lambda_mult`
+  default (0.5) are not yet configurable; extreme `top_k` or unusual corpora may want
+  tuning. Score↔chunk join relies on `chunk_hash` (falls back to content) — a citation
+  shows `score: null` if a selected chunk isn't in the scored candidate pool.
+- **In-process async ingest** — uses FastAPI `BackgroundTasks` (single process, not
+  durable across restarts); move to a worker/broker (Celery/RQ) for durability and scale.
+- **`retrieve_context` complexity** is CC 15 (radon) — a candidate for extracting the
+  weak-match branch into a helper.
+- See [`README.md`](README.md) → Roadmap and [`CHANGELOG.md`](CHANGELOG.md) `[2.1.0]` →
+  Known limitations for the broader list.

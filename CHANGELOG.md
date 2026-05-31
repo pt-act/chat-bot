@@ -96,6 +96,22 @@ response shapes (now flagged deprecated); the new typed contract lives under `/a
 - **`.env` / `.coverage`** untracked from git and added to `.gitignore`.
 - **`db.vector.chroma()`** — unused alias of `get_vectorstore()`.
 
+### Known limitations (at 2.1.0)
+
+- **Retrieval quality is not validated against a live corpus** — tests are hermetic
+  (ChromaDB/embeddings mocked). MMR invocation and citation-score joining are covered, but
+  real relevance/diversity is not; run a live eval (RAGAS / manual spot-checks) before
+  trusting answer quality and after changing chunking, `top_k`, `fetch_k`, or embeddings.
+- **`chromadb 1.5.9` CVE-2026-45829** has no upstream fix (mitigated by embedded use).
+- **No authentication on `/chat`** — `X-User-Id` is validated/namespaced, not authenticated.
+- **SSRF guard has a TOCTOU window** (DNS re-resolves at request time); mitigated by
+  `allow_redirects=False`, not airtight.
+- **Rate limiter fails open** on Redis outage (availability over enforcement).
+- **Async ingest is in-process** (`BackgroundTasks`) — not durable across restarts.
+- **MMR `fetch_k`/`lambda_mult` are not configurable yet**; a citation may show
+  `score: null` if its chunk falls outside the scored candidate pool.
+- **`retrieve_context` complexity** is CC 15 — a refactor candidate.
+
 ---
 
 ## [2.0.0] — 2026-05-30
