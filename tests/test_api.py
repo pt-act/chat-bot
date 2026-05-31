@@ -196,10 +196,12 @@ class TestAuthMiddleware:
 
 
 class TestValidationErrorHandler:
-    def test_validation_error_returns_structured_details(self):
+    def test_validation_error_returns_problem_json(self):
         with _make_app() as client:
             resp = client.post("/api/chat", json={"q": ""})
+            assert resp.status_code == 422
             data = resp.json()
-            assert "error" in data
-            assert data["error"] == "Validation failed"
-            assert "details" in data
+            # RFC 9457 problem+json shape (middlewares/errors.py)
+            assert data["title"] == "Validation failed"
+            assert data["status"] == 422
+            assert any(e["field"] == "q" for e in data["errors"])
