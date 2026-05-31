@@ -1,6 +1,7 @@
 fastapi==0.136.1
 uvicorn[standard]==0.46.0
 python-multipart==0.0.20  # required by FastAPI for multipart/form-data (file uploads)
+h11>=0.16.0  # transitive (uvicorn/httpx); floor fixes request-smuggling CVE-2025-43859
 
 pydantic==2.13.2
 pydantic-settings==2.14.1
@@ -29,7 +30,7 @@ python-json-logger==2.0.7
 fastembed==0.8.0
 pillow>=12.2.0  # fastembed dependency — pinned to avoid CVEs in <12.2.0
 
-pypdf==6.11.0
+pypdf==6.12.0  # 6.12.0 fixes xref/layout-extraction DoS CVEs (AIKIDO-2026-10937/10938)
 docx2txt==0.9          # .docx text extraction (lightweight, pure-Python)
 beautifulsoup4==4.14.2  # .html/.htm text extraction (uses the stdlib html.parser)
 rank-bm25==0.2.2  # lexical retrieval for the optional hybrid strategy (RETRIEVAL_STRATEGY=hybrid)

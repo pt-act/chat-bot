@@ -119,6 +119,20 @@ in sync.
 
 - Added **`tenacity`** (resilience, #14) and **`rank-bm25`** (hybrid retrieval, Phase 4).
 
+### Security
+
+- **`pypdf` 6.11.0 → 6.12.0** — fixes two PDF-parsing DoS issues (AIKIDO-2026-10938
+  xref-stream over-iteration, AIKIDO-2026-10937 layout-mode whitespace blow-up).
+- **Pinned `h11>=0.16.0`** (transitive via uvicorn/httpx) — closes the chunked-body
+  request-smuggling leniency in CVE-2025-43859.
+- **Container hardening** — the Docker image now runs as a non-root `appuser` (least
+  privilege); runtime dirs (`logs`, `chroma_db`, `ingest_incoming`) are pre-created and
+  owned by it so queue-mode uploads stay writable.
+- **Residual:** `chromadb 1.5.9` **CVE-2026-45829** (pre-auth RCE in *server* mode) still
+  has no upstream-fixed release; mitigated by embedded (non-server) use and excluded in CI
+  pip-audit. The ingest downloader's SSRF surface remains guarded by `validate_download_url`
+  (DNS-aware private/metadata-IP blocking), `allow_redirects=False`, and `ALLOWED_HOSTS`.
+
 ### Known limitations (at 2.4.0)
 
 - **Groundedness heuristic is lexical** (content-word overlap) — tune `GROUNDEDNESS_MIN_SCORE`
