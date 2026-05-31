@@ -26,6 +26,8 @@
 - [Document Ingestion](#-6-document-ingestion-s3--chromadb)
 - [Chat API](#-7-chat-api)
 - [Health & Readiness](#-8-health--readiness)
+- [Web Client](#-web-client)
+- [Further Documentation](#-further-documentation)
 - [Observability](#-observability)
 - [Core System Design](#-core-system-design)
 - [Security](#-security)
@@ -369,34 +371,41 @@ All settings are pre-configured in `docker-compose.local.yml`:
 
 ## 📥 6. Document Ingestion (S3 → ChromaDB)
 
-### Ingest a document
+On `/api/v1`, ingestion is **asynchronous**: the request returns `202 Accepted` with
+`status=queued` and a `Location` header, then processes in the background — poll the
+status endpoint for progress. (Legacy `/api/ingest` remains synchronous.)
+
+### Queue a document
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/api/ingest" \
+curl -X POST "http://127.0.0.1:8000/api/v1/ingest" \
   -H "Content-Type: application/json" \
-  -d '{
-    "file_name": "terms_conditions",
-    "s3_url": "https://your-s3-url.pdf"
-  }'
+  -d '{"file_name": "terms_conditions", "s3_url": "https://your-s3-url.pdf"}'
+# → 202  {"doc_id": "terms_conditions", "status": "queued"}
 ```
 
-### Check ingest status
+### Check ingest status (poll)
 
 ```bash
-curl http://127.0.0.1:8000/api/ingest/status/terms_conditions
+curl http://127.0.0.1:8000/api/v1/ingest/status/terms_conditions
+# → {"doc_id": "...", "status": "done", "added": 12, "total": 12, "version": "..."}
 ```
 
-### List all ingested documents
+### List ingested documents (paginated)
 
 ```bash
-curl http://127.0.0.1:8000/api/ingest/docs
+curl "http://127.0.0.1:8000/api/v1/ingest/docs?limit=50&cursor=0"
+# → {"total": N, "docs": [...], "next_cursor": "50"}
 ```
 
 ### Delete a document
 
 ```bash
-curl -X DELETE http://127.0.0.1:8000/api/ingest/terms_conditions
+curl -X DELETE http://127.0.0.1:8000/api/v1/ingest/terms_conditions
 ```
+
+> Ingest management endpoints honor API-key auth — `DELETE` always requires `X-API-Key`,
+> and the others require it when `REQUIRE_AUTH_FOR_INGEST=true`.
 
 ## 💬 7. Chat API
 
@@ -410,7 +419,9 @@ The system supports three interaction modes via `CHAT_MODE` in `.env`:
 | **open** | Free interaction | Uses general knowledge, honest about provenance | No | General assistants, brainstorming |
 | **learning** | Free interaction + growing KB | Synthesizes answer, auto-saves to ChromaDB | Yes (≥50 chars, no docs found) | Knowledge-building, research assistants |
 
-> **Learning mode quality gate:** Only auto-ingests responses when (1) no documents matched the question (filling a knowledge gap) and (2) the answer is ≥50 characters. All synthesized entries are tagged with `source_type=synthesized` so you can distinguish model-generated content from ingested documents.
+> **Learning mode quality gate:** Only auto-ingests responses when (1) no documents matched the question (filling a knowledge gap) and (2) the answer is ≥50 characters. Synthesized entries live in a **separate ChromaDB collection** (`synthesized_answers`) and are only consulted in `learning` mode — they never pollute `strict`/`open` retrieval.
+
+`CHAT_MODE` sets the server default; clients can override it **per request** (see below).
 
 ```env
 # In .env
@@ -418,30 +429,68 @@ CHAT_MODE=strict    # or open, or learning
 SELF_INGEST_MIN_LENGTH=50
 ```
 
-### Endpoint
+### API versions
 
-```
-POST /api/chat
-```
+The API is **versioned**. New clients should use `/api/v1`; the unversioned `/api/*`
+paths still work but are **deprecated** (responses carry `Deprecation`/`Sunset`/`Link`
+headers). Errors everywhere use **RFC 9457 `application/problem+json`**.
 
-### Request
+| | `/api/v1` (recommended) | `/api` (legacy, deprecated) |
+|---|---|---|
+| Chat response | `{ answer, sources[], meta }` (typed) | `{ status, data, sources[] }` |
+| Sources | structured objects (label, doc_id, score, page, snippet) | bare label strings |
+| Streaming | `POST /api/v1/chat/stream` (SSE) | — |
+| Ingest | `202` + background + poll | synchronous |
 
-```json
+### `POST /api/v1/chat`
+
+Request (`q` required; the rest are optional per-request overrides):
+
+```jsonc
 {
-  "q": "what are the return policies?"
+  "q": "what is the return policy?",
+  "mode": "strict",        // strict | open | learning  (overrides server default)
+  "lang": "auto",          // auto | en | ar  (auto-detects Arabic vs English)
+  "top_k": 3,              // 1..10 chunks to retrieve
+  "score_threshold": 0.3   // 0..1 minimum relevance
 }
 ```
 
-### Example
-
 ```bash
-curl -X POST "http://127.0.0.1:8000/api/chat" \
-  -H "Content-Type: application/json" \
-  -H "X-User-ID: user_123" \
-  -d '{"q":"what is return policy?"}'
+curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
+  -H "Content-Type: application/json" -H "X-User-Id: user_123" \
+  -d '{"q":"what is the return policy?"}'
 ```
 
-> `X-User-ID` identifies the user session — memory is stored and loaded per user. Defaults to `anonymous` if omitted.
+Response:
+
+```json
+{
+  "answer": "Returns are accepted within 30 days of purchase.",
+  "sources": [
+    {"label": "return_policy.pdf", "doc_id": "return_policy", "score": 0.82, "page": 3, "snippet": "Customers may return..."}
+  ],
+  "meta": {"mode": "strict", "lang": "en", "self_ingested": false, "correlation_id": "…", "model": "gpt-4o-mini"}
+}
+```
+
+### `POST /api/v1/chat/stream` (Server-Sent Events)
+
+Streams the answer token-by-token. Same request body. Event sequence:
+
+```
+event: token    data: {"delta": "Returns"}
+event: token    data: {"delta": " are"}
+event: sources  data: {"sources": [ … ]}
+event: done     data: {"meta": { … }}
+```
+
+On failure an `event: error` frame is emitted (no internal detail). Each response
+includes a `X-Correlation-Id` header and rate-limit headers
+(`X-RateLimit-Limit/Remaining/Reset`, plus `Retry-After` on `429`).
+
+> `X-User-Id` scopes per-user conversation memory (defaults to `anonymous`). It is
+> validated (`[A-Za-z0-9_.@-]{1,128}`) and namespaced internally.
 
 ## 🏥 8. Health & Readiness
 
@@ -460,6 +509,30 @@ curl http://127.0.0.1:8000/ready
 ```
 
 Returns `200` with `{"status": "ready"}` only if both Redis and ChromaDB respond right now. Returns `503` with dependency-specific error details if either is down. Use this for Kubernetes readiness probes or load balancer health checks.
+
+## 🖥️ Web Client
+
+A reference single-page client lives in [`web/`](web/) (Vite + React + TypeScript). It
+demonstrates the v1 API end-to-end: **streaming chat** (SSE), per-request **mode**/
+**language** selectors, **structured citations**, **RTL/Arabic** rendering, accessibility
+(`aria-live`, keyboard send, focus rings), and a backend health badge.
+
+```bash
+cd web
+bun install      # or npm install
+bun run dev      # http://localhost:5173 (proxies /api and /health to :8000)
+bun run build    # production bundle → web/dist/
+```
+
+See [`web/README.md`](web/README.md) for details.
+
+## 📚 Further Documentation
+
+- [`user_guidelines.md`](user_guidelines.md) — end-user / API-consumer guide (modes,
+  languages, citations, errors, rate limits, streaming, worked examples).
+- [`PTD.md`](PTD.md) — Project Technical Document (architecture, data flow, components,
+  storage, security, observability, testing, CI/CD, deployment, design decisions).
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Observability
 
