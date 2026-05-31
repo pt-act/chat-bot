@@ -1,0 +1,264 @@
+:root {
+  --bg: #0b0c0e;
+  --surface: #16181d;
+  --surface-2: #1f232b;
+  --text: #e7e9ee;
+  --muted: #9aa3b2;
+  --accent: #4f8cff;
+  --danger: #ff6b6b;
+  --radius: 12px;
+  --space: 16px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 860px;
+  margin-inline: auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space);
+  border-block-end: 1px solid var(--surface-2);
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space);
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.control select {
+  background: var(--surface-2);
+  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.main {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space);
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.empty-title {
+  font-size: 17px;
+  color: var(--text);
+  margin-block-end: 4px;
+}
+
+.bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.bubble-user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+}
+
+.bubble-assistant {
+  align-self: flex-start;
+  background: var(--surface);
+}
+
+.bubble-error {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.badge-learn {
+  display: inline-block;
+  margin-block-start: 8px;
+  font-size: 11px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0 6px;
+}
+
+.sources {
+  margin-block-start: 10px;
+}
+
+.sources-toggle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+}
+
+.sources-list {
+  list-style: none;
+  padding: 0;
+  margin-block-start: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.source-label {
+  font-weight: 600;
+}
+
+.source-meta,
+.source-score {
+  color: var(--muted);
+  font-size: 12px;
+  margin-inline-start: 8px;
+}
+
+.source-snippet {
+  margin-block: 6px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.footer {
+  padding: var(--space);
+  border-block-start: 1px solid var(--surface-2);
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.composer-input {
+  flex: 1;
+  resize: none;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--surface-2);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font: inherit;
+  max-height: 160px;
+}
+
+.btn {
+  border: none;
+  border-radius: var(--radius);
+  padding: 10px 18px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-send {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-stop {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.health-ok .health-dot {
+  background: #3ecf8e;
+}
+
+.health-warn .health-dot {
+  background: var(--danger);
+}
+
+/* Accessibility: clear keyboard focus + reduced motion. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+  }
+}
