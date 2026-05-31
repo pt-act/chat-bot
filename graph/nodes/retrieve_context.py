@@ -58,6 +58,16 @@ def _dedup(sources: list[dict]) -> list[dict]:
     return out
 
 
+def _score_key(doc) -> str:
+    """Stable key for matching a retrieved document back to its relevance score.
+
+    Ingested chunks carry a unique ``chunk_hash``; fall back to page_content
+    (e.g. synthesized docs) when absent.
+    """
+    meta = getattr(doc, "metadata", None) or {}
+    return meta.get("chunk_hash") or getattr(doc, "page_content", str(doc))
+
+
 def retrieve_context(state):
     question = state["question"]
     settings = get_settings()
@@ -65,16 +75,24 @@ def retrieve_context(state):
     if threshold is None:
         threshold = settings.retrieval_score_threshold
     top_k = state.get("top_k") or 3
+    # Candidate pool for the relevance gate and MMR's fetch_k (>= the documented 10).
+    fetch_k = max(10, top_k * 4)
     chat_mode = state.get("chat_mode", "strict")
     vs = get_vectorstore()
 
-    scored = vs.similarity_search_with_relevance_scores(question, k=top_k)
+    # Step 1 — relevance gate + per-chunk scores. Score the candidate pool once, then
+    # reuse it to (a) decide the gate via the top score and (b) attach relevance scores
+    # to whichever chunks MMR selects (so citations keep their scores).
+    scored = vs.similarity_search_with_relevance_scores(question, k=fetch_k)
     best_score = scored[0][1] if scored else 0.0
 
     # Strict mode: block below threshold (no context → refusal prompt)
     if chat_mode == "strict" and best_score < threshold:
         logger.info("Best score %.3f below threshold %.2f; returning no docs", best_score, threshold)
         return {"docs": "", "sources": [], "best_score": best_score}
+
+    # chunk -> relevance score, used to annotate whichever chunks we ultimately cite.
+    score_map = {_score_key(doc): s for doc, s in scored}
 
     # Open/learning mode with low scores: provide best available matches (may be weak)
     if chat_mode != "strict" and best_score < threshold:
@@ -84,12 +102,14 @@ def retrieve_context(state):
         if chat_mode == "learning":
             docs = docs + _search_synthesized(question, k=top_k)
         context = "\n\n".join(d.page_content for d in docs) if docs else ""
-        sources = _dedup([_to_source(d) for d in docs])
+        sources = _dedup([_to_source(d, score_map.get(_score_key(d))) for d in docs])
         logger.info("Open/learning mode: providing %d low-score docs (best=%.3f)", len(docs), best_score)
         return {"docs": context, "sources": sources, "best_score": best_score}
 
-    # Above threshold: reuse the scored top-k (gives per-source relevance scores for citations)
-    context = "\n\n".join(d.page_content for d, _ in scored)
-    sources = _dedup([_to_source(d, s) for d, s in scored])
-    logger.info("Retrieved %d chunks (best score: %.3f)", len(scored), best_score)
+    # Step 2 — above threshold: MMR for diverse, non-redundant chunks (quality over a few
+    # ms of extra compute). Per-citation scores come from the candidate pool scored above.
+    results = vs.max_marginal_relevance_search(question, k=top_k, fetch_k=fetch_k)
+    context = "\n\n".join(d.page_content for d in results)
+    sources = _dedup([_to_source(d, score_map.get(_score_key(d))) for d in results])
+    logger.info("Retrieved %d chunks via MMR (best=%.3f, fetch_k=%d)", len(results), best_score, fetch_k)
     return {"docs": context, "sources": sources, "best_score": best_score}

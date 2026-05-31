@@ -522,6 +522,10 @@ class TestEmbeddingAdapter:
 
     @patch("utils.embedding_adapter.get_settings")
     def test_huggingface_provider(self, mock_settings):
+        # HuggingFace is an OPTIONAL provider — langchain-huggingface (and its torch
+        # dependency) are intentionally not in requirements (CHANGELOG AD #12). Skip when
+        # the optional package isn't installed so CI stays green without re-adding it.
+        pytest.importorskip("langchain_huggingface")
         mock_settings.return_value = MagicMock(
             embedding_provider="huggingface",
             embedding_model="sentence-transformers/all-MiniLM-L6-v2",

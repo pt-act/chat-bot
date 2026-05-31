@@ -68,25 +68,30 @@ class TestRetrieveContext:
 
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
-    def test_above_threshold_returns_structured_sources(self, mock_settings, mock_get_vs):
+    def test_above_threshold_uses_mmr_with_scores(self, mock_settings, mock_get_vs):
         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
         vs = MagicMock()
         doc1 = MagicMock(
-            page_content="chunk one", metadata={"doc_id": "policy", "source_file": "policy.pdf", "page_number": 1}
+            page_content="chunk one",
+            metadata={"doc_id": "policy", "source_file": "policy.pdf", "page_number": 1, "chunk_hash": "h1"},
         )
         doc2 = MagicMock(
-            page_content="chunk two", metadata={"doc_id": "policy", "source_file": "policy.pdf", "page_number": 2}
+            page_content="chunk two",
+            metadata={"doc_id": "policy", "source_file": "policy.pdf", "page_number": 2, "chunk_hash": "h2"},
         )
-        # The scored top-k drives both context and citation scores (MMR no longer used).
+        # Scored candidate pool supplies the gate score + per-citation scores...
         vs.similarity_search_with_relevance_scores.return_value = [(doc1, 0.8), (doc2, 0.7)]
+        # ...and MMR selects the diverse chunks that are actually used (feature restored).
+        vs.max_marginal_relevance_search.return_value = [doc1, doc2]
         mock_get_vs.return_value = vs
 
         result = retrieve_context({"question": "test", "chat_mode": "strict"})
+
+        # MMR must be the selector (not raw top-k).
+        vs.max_marginal_relevance_search.assert_called_once()
         assert result["docs"] == "chunk one\n\nchunk two"
         assert result["best_score"] == 0.8
-        # Structured citations with score/page/snippet (distinct pages → not deduped).
-        labels = [s["label"] for s in result["sources"]]
-        assert labels == ["policy.pdf", "policy.pdf"]
+        # Citations keep their relevance scores (joined from the scored pool by chunk_hash).
         assert result["sources"][0] == {
             "label": "policy.pdf",
             "doc_id": "policy",
@@ -94,6 +99,7 @@ class TestRetrieveContext:
             "page": 1,
             "snippet": "chunk one",
         }
+        assert result["sources"][1]["score"] == 0.7
 
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
