@@ -1,0 +1,295 @@
+diff --git a/.coverage b/.coverage
+deleted file mode 100644
+index 496dd6f..0000000
+Binary files a/.coverage and /dev/null differ
+diff --git a/graph/nodes/retrieve_context.py b/graph/nodes/retrieve_context.py
+index 24265f9..1faf504 100644
+--- a/graph/nodes/retrieve_context.py
++++ b/graph/nodes/retrieve_context.py
+@@ -6,6 +6,18 @@ from db.vector import get_vectorstore
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _source_of(doc) -> str:
++    """Resolve a human-readable source label for a retrieved chunk.
++
++    Ingested policy chunks store the filename under ``source_file`` (see
++    ingest.policies._build_chunks), while self-ingested/synthesized chunks use
++    ``source``. Check both so the API never silently reports ``unknown`` for
++    real documents.
++    """
++    meta = doc.metadata or {}
++    return meta.get("source_file") or meta.get("source") or "unknown"
++
++
+ def retrieve_context(state):
+     question = state["question"]
+     threshold = get_settings().retrieval_score_threshold
+@@ -24,13 +36,13 @@ def retrieve_context(state):
+     if chat_mode != "strict" and best_score < threshold:
+         docs = vs.similarity_search(question, k=3)
+         context = "\n\n".join(d.page_content for d in docs) if docs else ""
+-        sources = list({d.metadata.get("source", "unknown") for d in docs}) if docs else []
++        sources = list({_source_of(d) for d in docs}) if docs else []
+         logger.info("Open/learning mode: providing %d low-score docs (best=%.3f)", len(docs), best_score)
+         return {"docs": context, "sources": sources, "best_score": best_score}
+ 
+     # Above threshold: MMR for diverse, relevant results
+     results = vs.max_marginal_relevance_search(question, k=3, fetch_k=10)
+     context = "\n\n".join(d.page_content for d in results)
+-    sources = list({d.metadata.get("source", "unknown") for d in results})
++    sources = list({_source_of(d) for d in results})
+     logger.info("Retrieved %d chunks via MMR (best score: %.3f)", len(results), best_score)
+     return {"docs": context, "sources": sources, "best_score": best_score}
+diff --git a/ingest/policies.py b/ingest/policies.py
+index 9700bb3..397a5d1 100644
+--- a/ingest/policies.py
++++ b/ingest/policies.py
+@@ -52,6 +52,10 @@ def _download_file(s3_url: str, file_name: str) -> str:
+             timeout=setting.download_timeout_seconds,
+             stream=True,
+             headers={"User-Agent": "Mozilla/5.0"},
++            # SSRF hardening: do not follow redirects — an allowed host could
++            # otherwise 30x-redirect to a private/metadata address, bypassing
++            # the validate_download_url() check that ran on the original URL.
++            allow_redirects=False,
+         )
+         response.raise_for_status()
+     except requests.RequestException as e:
+@@ -187,7 +191,9 @@ def _persist_ingest_status(
+ 
+ 
+ def process_policy(file_name: str, s3_url: str) -> dict:
+-    doc_id = file_name.rstrip(".pdf") if file_name.endswith(".pdf") else file_name
++    # NOTE: use removesuffix, NOT rstrip — str.rstrip(".pdf") strips any trailing
++    # combination of the characters {'.', 'p', 'd', 'f'}, so "app.pdf" -> "a".
++    doc_id = file_name.removesuffix(".pdf")
+     redis_client = get_redis()
+     file_path = None
+ 
+diff --git a/requirements.txt b/requirements.txt
+index e8a7525..b3daa3c 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -15,8 +15,9 @@ langgraph==1.1.8
+ langchain==1.2.15
+ langchain-core>=1.3.3
+ langchain-openai==1.1.14
+-langchain-anthropic
+-langchain-groq
++langchain-anthropic==1.4.4
++langchain-groq==1.1.2
++langchain-google-genai==4.2.4  # required by LLM_PROVIDER=google (config.py supports it)
+ langchain-community==0.4.1
+ langchain-chroma==1.1.0
+ 
+diff --git a/tests/test_api.py b/tests/test_api.py
+index be19599..6b483f0 100644
+--- a/tests/test_api.py
++++ b/tests/test_api.py
+@@ -145,9 +145,11 @@ class TestIngestEndpoint:
+ 
+ 
+ class TestReadinessEndpoint:
++    @patch("main.get_redis")
+     @patch("main.get_vectorstore")
+-    def test_ready_all_deps_ok(self, mock_vs):
++    def test_ready_all_deps_ok(self, mock_vs, mock_redis):
+         mock_vs.return_value.similarity_search.return_value = []
++        mock_redis.return_value.ping.return_value = True
+         with _make_app() as client:
+             resp = client.get("/ready")
+             assert resp.status_code == 200
+diff --git a/tests/test_audit_fixes.py b/tests/test_audit_fixes.py
+new file mode 100644
+index 0000000..a4e9879
+--- /dev/null
++++ b/tests/test_audit_fixes.py
+@@ -0,0 +1,94 @@
++"""Regression tests for issues found during the code-quality audit.
++
++Each test maps to a finding in audit_report.md and fails against the
++pre-fix code, guarding against reintroduction.
++"""
++
++from unittest.mock import MagicMock, patch
++
++import responses as resp
++
++from graph.nodes.retrieve_context import _source_of
++from ingest.policies import process_policy
++from utils.llm_adapter import get_llm
++
++
++# ── Finding: get_llm() ignored generation params / raised TypeError ──────────────
++# graph nodes call get_llm(temperature=..., max_tokens=...) but the function
++# took no arguments, so the real (unmocked) chat path raised TypeError.
++class TestGetLlmAcceptsGenerationParams:
++    def setup_method(self):
++        get_llm.cache_clear()
++
++    @patch("utils.llm_adapter.get_settings")
++    def test_openai_forwards_temperature_and_max_tokens(self, mock_settings):
++        mock_settings.return_value = MagicMock(
++            llm_provider="openai", llm_model="gpt-4o-mini", llm_base_url="", openai_api_key=""
++        )
++        with patch("langchain_openai.ChatOpenAI") as mock_cls:
++            get_llm(temperature=0.3, max_tokens=512)
++            mock_cls.assert_called_once_with(model="gpt-4o-mini", temperature=0.3, max_tokens=512)
++
++    @patch("utils.llm_adapter.get_settings")
++    def test_google_missing_key_raises_valueerror_not_importerror(self, mock_settings):
++        # Key validation must happen *before* importing the optional package.
++        mock_settings.return_value = MagicMock(
++            llm_provider="google", llm_model="gemini-1.5-flash", llm_base_url="", google_api_key=""
++        )
++        import pytest
++
++        with pytest.raises(ValueError, match="GOOGLE_API_KEY is required"):
++            get_llm()
++
++
++# ── Finding: retrieve_context reported "unknown" sources for ingested docs ───────
++# Ingest writes the filename under metadata["source_file"]; retrieval read
++# metadata["source"], so every real policy chunk surfaced as "unknown".
++class TestSourceResolution:
++    def test_prefers_source_file_key(self):
++        doc = MagicMock()
++        doc.metadata = {"source_file": "return_policy.pdf"}
++        assert _source_of(doc) == "return_policy.pdf"
++
++    def test_falls_back_to_source_key_for_synthesized_docs(self):
++        doc = MagicMock()
++        doc.metadata = {"source": "synthesized:abc123"}
++        assert _source_of(doc) == "synthesized:abc123"
++
++    def test_unknown_when_no_source_metadata(self):
++        doc = MagicMock()
++        doc.metadata = {}
++        assert _source_of(doc) == "unknown"
++
++
++# ── Finding: doc_id derivation used str.rstrip(".pdf") (strips a char set) ───────
++class TestDocIdSuffixStripping:
++    @resp.activate
++    def test_pdf_suffix_removed_without_eating_filename_chars(self, pdf_v1_bytes, ingest_env):
++        # "app.pdf" -> rstrip(".pdf") == "a" (bug); removesuffix -> "app" (fixed).
++        url = "https://test-bucket.s3.amazonaws.com/app.pdf"
++        resp.add(resp.GET, url, body=pdf_v1_bytes, status=200)
++        result = process_policy("app.pdf", url)
++        assert result["doc_id"] == "app"
++
++
++# ── Finding: SSRF allowlist bypass via HTTP redirect ─────────────────────────────
++# An allowed public URL could 30x-redirect to a private/metadata address.
++# The download must not follow redirects.
++class TestDownloadDoesNotFollowRedirects:
++    @resp.activate
++    def test_redirect_to_private_host_is_not_followed(self, ingest_env):
++        import pytest
++
++        public = "https://test-bucket.s3.amazonaws.com/return_policy.pdf"
++        internal = "http://169.254.169.254/latest/meta-data/"
++        resp.add(resp.GET, public, status=302, headers={"Location": internal})
++
++        # With allow_redirects=False the 30x body is empty, so ingestion fails
++        # loudly instead of silently fetching the internal target.
++        with pytest.raises(Exception):
++            process_policy("return_policy", public)
++
++        # The internal/metadata target must never have been requested.
++        requested = [c.request.url for c in resp.calls]
++        assert all("169.254.169.254" not in u for u in requested)
+diff --git a/tests/test_rate_limiter.py b/tests/test_rate_limiter.py
+index e207ba9..c014fcc 100644
+--- a/tests/test_rate_limiter.py
++++ b/tests/test_rate_limiter.py
+@@ -60,20 +60,25 @@ class TestRateLimitMiddleware:
+         def test_endpoint():
+             return {"status": "ok"}
+ 
+-        with patch(
++        # Start the patch and keep it active for the lifetime of the test.
++        # (Previously this used `with patch(...): return TestClient(app)`, which
++        # exited the patch *before* any request ran — so the middleware talked to
++        # a real Redis, failed open, and the assertions silently passed/failed
++        # depending on the environment. teardown_method stops it.)
++        self._patcher = patch(
+             "middlewares.rate_limiter.get_redis",
+             return_value=fakeredis.FakeRedis(decode_responses=True),
+-        ):
+-            return TestClient(app)
++        )
++        self._patcher.start()
++        return TestClient(app)
++
++    def teardown_method(self):
++        patcher = getattr(self, "_patcher", None)
++        if patcher is not None:
++            patcher.stop()
+ 
+     def test_request_within_limit_succeeds(self):
+         client = self._make_app(max_requests=5)
+-        # Clear any residual rate limit keys from other tests
+-        from db.redis_client import get_redis
+-
+-        redis = get_redis()
+-        for key in redis.scan_iter(match="rate_limit:*"):
+-            redis.delete(key)
+         resp = client.get("/test")
+         assert resp.status_code == 200
+ 
+diff --git a/utils/llm_adapter.py b/utils/llm_adapter.py
+index e73c972..3434c3d 100644
+--- a/utils/llm_adapter.py
++++ b/utils/llm_adapter.py
+@@ -30,7 +30,7 @@ OPENAI_COMPATIBLE = {
+ 
+ 
+ @lru_cache
+-def get_llm():
++def get_llm(temperature: float = 0, max_tokens: int = 1000):
+     setting = get_settings()
+     provider = PROVIDER_ALIASES.get(setting.llm_provider.lower(), setting.llm_provider.lower())
+     model = setting.llm_model
+@@ -42,8 +42,8 @@ def get_llm():
+ 
+         kwargs = {
+             "model": model,
+-            "temperature": 0,
+-            "max_tokens": 1000,
++            "temperature": temperature,
++            "max_tokens": max_tokens,
+         }
+ 
+         # If base_url is set, use it (Ollama, OpenRouter, Together, etc.)
+@@ -63,20 +63,23 @@ def get_llm():
+ 
+         return ChatAnthropic(
+             model=model,
+-            temperature=0,
+-            max_tokens=1000,
++            temperature=temperature,
++            max_tokens=max_tokens,
+         )
+ 
+     # Google Gemini — native client
+     elif provider == "google":
+-        from langchain_google_genai import ChatGoogleGenerativeAI
+-
++        # Validate config before importing the optional provider package so a
++        # missing key raises a clear ValueError instead of an ImportError.
+         if not setting.google_api_key:
+             raise ValueError("GOOGLE_API_KEY is required when LLM_PROVIDER=google")
++
++        from langchain_google_genai import ChatGoogleGenerativeAI
++
+         return ChatGoogleGenerativeAI(
+             model=model,
+-            temperature=0,
+-            max_tokens=1000,
++            temperature=temperature,
++            max_tokens=max_tokens,
+         )
+ 
+     else:

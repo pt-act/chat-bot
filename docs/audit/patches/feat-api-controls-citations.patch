@@ -1,0 +1,540 @@
+diff --git a/controllers/chat_controller.py b/controllers/chat_controller.py
+index ef7f03f..d13d4a5 100644
+--- a/controllers/chat_controller.py
++++ b/controllers/chat_controller.py
+@@ -36,7 +36,9 @@ def chat_controller(
+     try:
+         result = conversation(user_id=user_id, q=request.q)
+         logger.info("Chat response generated for user %s", user_id)
+-        return {"status": "success", "data": result["answer"], "sources": result["sources"]}
++        # Legacy contract: sources are bare label strings (v1 returns structured objects).
++        sources = [s.get("label", "unknown") if isinstance(s, dict) else s for s in result["sources"]]
++        return {"status": "success", "data": result["answer"], "sources": sources}
+     except ValueError as e:
+         # 4xx validation feedback is safe to surface to the caller.
+         logger.warning("Chat validation error for user %s: %s", user_id, e)
+diff --git a/controllers/v1/chat.py b/controllers/v1/chat.py
+index 36aebcb..db07686 100644
+--- a/controllers/v1/chat.py
++++ b/controllers/v1/chat.py
+@@ -28,7 +28,14 @@ def chat(request: ChatRequest, x_user_id: str = Header(default="anonymous")) ->
+     user_id = _validate_user_id(x_user_id)
+     settings = get_settings()
+     try:
+-        result = conversation(user_id=user_id, q=request.q)
++        result = conversation(
++            user_id=user_id,
++            q=request.q,
++            mode=request.mode,
++            lang=request.lang,
++            top_k=request.top_k,
++            score_threshold=request.score_threshold,
++        )
+     except ValueError as e:
+         logger.warning("Chat validation error for user %s: %s", user_id, e)
+         raise HTTPException(status_code=400, detail=str(e)) from e
+@@ -37,14 +44,24 @@ def chat(request: ChatRequest, x_user_id: str = Header(default="anonymous")) ->
+         raise HTTPException(status_code=500, detail="Failed to generate a response") from e
+ 
+     logger.info("Chat response generated for user %s", user_id)
+-    sources = [s if isinstance(s, Source) else Source(label=str(s)) for s in result.get("sources", [])]
++    sources = [_to_source(s) for s in result.get("sources", [])]
+     return ChatResponse(
+         answer=result["answer"],
+         sources=sources,
+         meta=ChatMeta(
+-            mode=settings.chat_mode.lower(),
++            mode=(request.mode or settings.chat_mode).lower(),
++            lang=result.get("lang"),
+             self_ingested=result.get("self_ingested", False),
+             correlation_id=correlation_id_var.get() or None,
+             model=settings.llm_model,
+         ),
+     )
++
++
++def _to_source(s) -> Source:
++    """Accept either a structured citation dict or a bare label string."""
++    if isinstance(s, Source):
++        return s
++    if isinstance(s, dict):
++        return Source(**{k: v for k, v in s.items() if k in Source.model_fields})
++    return Source(label=str(s))
+diff --git a/graph/nodes/generate_answer.py b/graph/nodes/generate_answer.py
+index 03527f0..6c353cc 100644
+--- a/graph/nodes/generate_answer.py
++++ b/graph/nodes/generate_answer.py
+@@ -19,12 +19,21 @@ def _response_language(question: str) -> str:
+     return "Arabic" if re.search(r"[؀-ۿ]", question) else "English"
+ 
+ 
++# Per-request language overrides ("auto" falls back to detection).
++_LANG_LABELS = {"en": "English", "ar": "Arabic"}
++
++
++def _resolve_language(state, question: str) -> str:
++    requested = (state.get("lang") or "auto").lower()
++    return _LANG_LABELS.get(requested, _response_language(question))
++
++
+ def generate_answer(state):
+     summary = state.get("summary", "")
+     messages = state.get("messages") or []
+     docs = state.get("docs", "")
+     question = state["question"]
+-    lang = _response_language(question)
++    lang = _resolve_language(state, question)
+     chat_mode = state.get("chat_mode", "strict")
+ 
+     recent = messages[-6:]
+@@ -49,4 +58,5 @@ def generate_answer(state):
+             AIMessage(content=response.content),
+         ],
+         "last_answer": response.content,
++        "lang": lang,  # resolved label, surfaced in response meta
+     }
+diff --git a/graph/nodes/retrieve_context.py b/graph/nodes/retrieve_context.py
+index 7b94caf..8af6f90 100644
+--- a/graph/nodes/retrieve_context.py
++++ b/graph/nodes/retrieve_context.py
+@@ -5,6 +5,8 @@ from db.vector import get_synthesized_vectorstore, get_vectorstore
+ 
+ logger = logging.getLogger(__name__)
+ 
++_SNIPPET_LEN = 200
++
+ 
+ def _search_synthesized(question: str, k: int = 3) -> list:
+     """Best-effort lookup of previously self-ingested answers (learning mode only).
+@@ -20,26 +22,54 @@ def _search_synthesized(question: str, k: int = 3) -> list:
+         return []
+ 
+ 
+-def _source_of(doc) -> str:
+-    """Resolve a human-readable source label for a retrieved chunk.
++def _snippet(text: str) -> str:
++    text = (text or "").strip()
++    if len(text) <= _SNIPPET_LEN:
++        return text
++    return text[:_SNIPPET_LEN].rsplit(" ", 1)[0] + "…"
+ 
+-    Ingested policy chunks store the filename under ``source_file`` (see
+-    ingest.policies._build_chunks), while self-ingested/synthesized chunks use
+-    ``source``. Check both so the API never silently reports ``unknown`` for
+-    real documents.
+-    """
+-    meta = doc.metadata or {}
++
++def _label_of(meta: dict) -> str:
++    # Ingested policy chunks store the filename under ``source_file``; synthesized
++    # chunks use ``source``. Check both so sources are never silently "unknown".
+     return meta.get("source_file") or meta.get("source") or "unknown"
+ 
+ 
++def _to_source(doc, score: float | None = None) -> dict:
++    """Build a structured citation from a retrieved chunk (see schemas.responses.Source)."""
++    meta = doc.metadata or {}
++    return {
++        "label": _label_of(meta),
++        "doc_id": meta.get("doc_id") or meta.get("source"),
++        "score": round(float(score), 4) if score is not None else None,
++        "page": meta.get("page_number"),
++        "snippet": _snippet(doc.page_content),
++    }
++
++
++def _dedup(sources: list[dict]) -> list[dict]:
++    """De-duplicate by (doc_id, label, page), keeping first occurrence (highest score)."""
++    seen, out = set(), []
++    for s in sources:
++        key = (s.get("doc_id"), s.get("label"), s.get("page"))
++        if key not in seen:
++            seen.add(key)
++            out.append(s)
++    return out
++
++
+ def retrieve_context(state):
+     question = state["question"]
+-    threshold = get_settings().retrieval_score_threshold
++    settings = get_settings()
++    threshold = state.get("score_threshold")
++    if threshold is None:
++        threshold = settings.retrieval_score_threshold
++    top_k = state.get("top_k") or 3
+     chat_mode = state.get("chat_mode", "strict")
+     vs = get_vectorstore()
+ 
+-    top = vs.similarity_search_with_relevance_scores(question, k=1)
+-    best_score = top[0][1] if top else 0.0
++    scored = vs.similarity_search_with_relevance_scores(question, k=top_k)
++    best_score = scored[0][1] if scored else 0.0
+ 
+     # Strict mode: block below threshold (no context → refusal prompt)
+     if chat_mode == "strict" and best_score < threshold:
+@@ -48,19 +78,18 @@ def retrieve_context(state):
+ 
+     # Open/learning mode with low scores: provide best available matches (may be weak)
+     if chat_mode != "strict" and best_score < threshold:
+-        docs = vs.similarity_search(question, k=3)
++        docs = vs.similarity_search(question, k=top_k)
+         # Learning mode additionally draws on previously synthesized answers, which
+         # live in a separate collection. Strict/open never see synthesized content.
+         if chat_mode == "learning":
+-            docs = docs + _search_synthesized(question, k=3)
++            docs = docs + _search_synthesized(question, k=top_k)
+         context = "\n\n".join(d.page_content for d in docs) if docs else ""
+-        sources = list({_source_of(d) for d in docs}) if docs else []
++        sources = _dedup([_to_source(d) for d in docs])
+         logger.info("Open/learning mode: providing %d low-score docs (best=%.3f)", len(docs), best_score)
+         return {"docs": context, "sources": sources, "best_score": best_score}
+ 
+-    # Above threshold: MMR for diverse, relevant results
+-    results = vs.max_marginal_relevance_search(question, k=3, fetch_k=10)
+-    context = "\n\n".join(d.page_content for d in results)
+-    sources = list({_source_of(d) for d in results})
+-    logger.info("Retrieved %d chunks via MMR (best score: %.3f)", len(results), best_score)
++    # Above threshold: reuse the scored top-k (gives per-source relevance scores for citations)
++    context = "\n\n".join(d.page_content for d, _ in scored)
++    sources = _dedup([_to_source(d, s) for d, s in scored])
++    logger.info("Retrieved %d chunks (best score: %.3f)", len(scored), best_score)
+     return {"docs": context, "sources": sources, "best_score": best_score}
+diff --git a/graph/state.py b/graph/state.py
+index 6c88731..6a5dc5f 100644
+--- a/graph/state.py
++++ b/graph/state.py
+@@ -2,14 +2,18 @@ from langchain_core.messages import BaseMessage
+ from typing_extensions import TypedDict
+ 
+ 
+-class State(TypedDict):
++class State(TypedDict, total=False):
+     user_id: str
+     question: str
+     messages: list[BaseMessage]
+     docs: str
+     summary: str
+-    sources: list[str]
++    sources: list[dict]  # structured citations: {label, doc_id, score, page, snippet}
+     chat_mode: str
+     best_score: float
+     last_answer: str
+     self_ingested: bool
++    # Per-request overrides (optional; fall back to server defaults)
++    lang: str  # input: "auto"|"en"|"ar"; after generate: resolved label "English"/"Arabic"
++    top_k: int
++    score_threshold: float
+diff --git a/middlewares/rate_limiter.py b/middlewares/rate_limiter.py
+index d26e70e..d910bd2 100644
+--- a/middlewares/rate_limiter.py
++++ b/middlewares/rate_limiter.py
+@@ -79,10 +79,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
+         self.window_seconds = window_seconds
+         self._trusted_proxies = get_settings().trusted_proxies
+ 
++    def _headers(self, remaining: int, reset_epoch: int) -> dict[str, str]:
++        return {
++            "X-RateLimit-Limit": str(self.max_requests),
++            "X-RateLimit-Remaining": str(max(0, remaining)),
++            "X-RateLimit-Reset": str(reset_epoch),
++        }
++
+     async def dispatch(self, request: Request, call_next):
+         ip = _get_client_ip(request, self._trusted_proxies)
+-        window = int(time.time()) // self.window_seconds  # current time window
++        now = int(time.time())
++        window = now // self.window_seconds  # current time window
+         key = f"rate_limit:{ip}:{window}"
++        reset_epoch = (window + 1) * self.window_seconds  # when the window rolls over
+ 
+         try:
+             redis = get_redis()
+@@ -94,16 +103,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
+                 redis.expire(key, self.window_seconds + 1)
+ 
+             if count > self.max_requests:
++                retry_after = max(1, reset_epoch - now)
+                 logger.warning("Rate limit exceeded for IP %s (%d requests)", ip, count)
++                headers = self._headers(0, reset_epoch)
++                headers["Retry-After"] = str(retry_after)
+                 return JSONResponse(
+                     status_code=429,
++                    media_type="application/problem+json",
++                    headers=headers,
+                     content={
+-                        "error": "Too many requests",
++                        "type": "https://errors.chat-bot/rate-limit",
++                        "title": "Too many requests",
++                        "status": 429,
+                         "detail": (
+                             f"Limit is {self.max_requests} requests per {self.window_seconds}s. Try again shortly."
+                         ),
+                     },
+                 )
++
++            response = await call_next(request)
++            for k, v in self._headers(self.max_requests - count, reset_epoch).items():
++                response.headers[k] = v
++            return response
+         except Exception:
+             # If Redis is unavailable, fail open to avoid blocking all traffic
+             logger.warning("Rate limiting unavailable (Redis error), allowing request from %s", ip)
+diff --git a/schemas/chat.py b/schemas/chat.py
+index 2b2f56e..0f92b8f 100644
+--- a/schemas/chat.py
++++ b/schemas/chat.py
+@@ -1,8 +1,21 @@
+-from pydantic import BaseModel, field_validator
++from typing import Literal
++
++from pydantic import BaseModel, Field, field_validator
+ 
+ 
+ class ChatRequest(BaseModel):
+     q: str
++    # Per-request overrides (all optional; omitted → server defaults / auto).
++    mode: Literal["strict", "open", "learning"] | None = Field(
++        default=None, description="Override the server's default chat mode for this request."
++    )
++    lang: Literal["auto", "en", "ar"] = Field(
++        default="auto", description="Force the response language, or auto-detect."
++    )
++    top_k: int | None = Field(default=None, ge=1, le=10, description="Number of chunks to retrieve.")
++    score_threshold: float | None = Field(
++        default=None, ge=0, le=1, description="Minimum relevance score for a chunk to be used."
++    )
+ 
+     @field_validator("q")
+     @classmethod
+diff --git a/services/chat_service.py b/services/chat_service.py
+index c5da591..c4742c9 100644
+--- a/services/chat_service.py
++++ b/services/chat_service.py
+@@ -6,18 +6,34 @@ from graph.builder import build_graph
+ _graph = lru_cache(maxsize=1)(build_graph)
+ 
+ 
+-def conversation(user_id: str, q: str):
+-    chat_mode = get_settings().chat_mode.lower()
+-    result = _graph().invoke(
+-        {
+-            "user_id": user_id,
+-            "question": q,
+-            "chat_mode": chat_mode,
+-        }
+-    )
++def conversation(
++    user_id: str,
++    q: str,
++    mode: str | None = None,
++    lang: str = "auto",
++    top_k: int | None = None,
++    score_threshold: float | None = None,
++):
++    """Run the chat graph for one turn.
+ 
++    `mode`/`lang`/`top_k`/`score_threshold` are optional per-request overrides;
++    when omitted the server defaults (config) and auto language detection apply.
++    """
++    chat_mode = (mode or get_settings().chat_mode).lower()
++    state: dict = {"user_id": user_id, "question": q, "chat_mode": chat_mode}
++    if lang and lang != "auto":
++        state["lang"] = lang
++    if top_k is not None:
++        state["top_k"] = top_k
++    if score_threshold is not None:
++        state["score_threshold"] = score_threshold
++
++    result = _graph().invoke(state)
++
++    resolved = result.get("lang")  # "English"/"Arabic" set by generate_answer
+     return {
+         "answer": result["messages"][-1].content,
+         "sources": result.get("sources", []),
+         "self_ingested": result.get("self_ingested", False),
++        "lang": "ar" if resolved == "Arabic" else "en",
+     }
+diff --git a/tests/test_api_v1.py b/tests/test_api_v1.py
+index 81c1013..c819c53 100644
+--- a/tests/test_api_v1.py
++++ b/tests/test_api_v1.py
+@@ -70,6 +70,41 @@ class TestProblemJson:
+         assert any(e["field"] == "q" for e in body["errors"])
+ 
+ 
++class TestPerRequestControls:
++    @patch("controllers.v1.chat.conversation")
++    def test_controls_passed_through(self, mock_conv):
++        mock_conv.return_value = {"answer": "a", "sources": [], "self_ingested": False, "lang": "en"}
++        resp = _client().post(
++            "/api/v1/chat",
++            json={"q": "hi", "mode": "open", "lang": "ar", "top_k": 5, "score_threshold": 0.4},
++        )
++        assert resp.status_code == 200
++        mock_conv.assert_called_once_with(
++            user_id="anonymous", q="hi", mode="open", lang="ar", top_k=5, score_threshold=0.4
++        )
++        assert resp.json()["meta"]["mode"] == "open"
++
++    def test_invalid_mode_rejected(self):
++        resp = _client().post("/api/v1/chat", json={"q": "hi", "mode": "bogus"})
++        assert resp.status_code == 422
++
++    def test_top_k_out_of_range_rejected(self):
++        resp = _client().post("/api/v1/chat", json={"q": "hi", "top_k": 99})
++        assert resp.status_code == 422
++
++    @patch("controllers.v1.chat.conversation")
++    def test_structured_citations_serialized(self, mock_conv):
++        mock_conv.return_value = {
++            "answer": "a",
++            "sources": [{"label": "policy.pdf", "doc_id": "policy", "score": 0.82, "page": 3, "snippet": "..."}],
++            "self_ingested": False,
++            "lang": "en",
++        }
++        resp = _client().post("/api/v1/chat", json={"q": "hi"})
++        src = resp.json()["sources"][0]
++        assert src["doc_id"] == "policy" and src["score"] == 0.82 and src["page"] == 3
++
++
+ class TestOpenAPI:
+     def test_v1_routes_documented(self):
+         spec = _client().get("/openapi.json").json()
+diff --git a/tests/test_audit_fixes.py b/tests/test_audit_fixes.py
+index a4e9879..af13103 100644
+--- a/tests/test_audit_fixes.py
++++ b/tests/test_audit_fixes.py
+@@ -8,11 +8,16 @@ from unittest.mock import MagicMock, patch
+ 
+ import responses as resp
+ 
+-from graph.nodes.retrieve_context import _source_of
++from graph.nodes.retrieve_context import _to_source
+ from ingest.policies import process_policy
+ from utils.llm_adapter import get_llm
+ 
+ 
++def _source_label(doc):
++    """Label resolution used to be `_source_of`; now derived from the structured source."""
++    return _to_source(doc)["label"]
++
++
+ # ── Finding: get_llm() ignored generation params / raised TypeError ──────────────
+ # graph nodes call get_llm(temperature=..., max_tokens=...) but the function
+ # took no arguments, so the real (unmocked) chat path raised TypeError.
+@@ -48,17 +53,17 @@ class TestSourceResolution:
+     def test_prefers_source_file_key(self):
+         doc = MagicMock()
+         doc.metadata = {"source_file": "return_policy.pdf"}
+-        assert _source_of(doc) == "return_policy.pdf"
++        assert _source_label(doc) == "return_policy.pdf"
+ 
+     def test_falls_back_to_source_key_for_synthesized_docs(self):
+         doc = MagicMock()
+         doc.metadata = {"source": "synthesized:abc123"}
+-        assert _source_of(doc) == "synthesized:abc123"
++        assert _source_label(doc) == "synthesized:abc123"
+ 
+     def test_unknown_when_no_source_metadata(self):
+         doc = MagicMock()
+         doc.metadata = {}
+-        assert _source_of(doc) == "unknown"
++        assert _source_label(doc) == "unknown"
+ 
+ 
+ # ── Finding: doc_id derivation used str.rstrip(".pdf") (strips a char set) ───────
+diff --git a/tests/test_graph_nodes.py b/tests/test_graph_nodes.py
+index eac2d0e..c6a777b 100644
+--- a/tests/test_graph_nodes.py
++++ b/tests/test_graph_nodes.py
+@@ -68,23 +68,32 @@ class TestRetrieveContext:
+ 
+     @patch("graph.nodes.retrieve_context.get_vectorstore")
+     @patch("graph.nodes.retrieve_context.get_settings")
+-    def test_above_threshold_returns_context(self, mock_settings, mock_get_vs):
++    def test_above_threshold_returns_structured_sources(self, mock_settings, mock_get_vs):
+         mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
+         vs = MagicMock()
+-        vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.8)]
+-        doc1 = MagicMock()
+-        doc1.page_content = "chunk one"
+-        doc1.metadata = {"source": "policy.pdf"}
+-        doc2 = MagicMock()
+-        doc2.page_content = "chunk two"
+-        doc2.metadata = {"source": "policy.pdf"}
+-        vs.max_marginal_relevance_search.return_value = [doc1, doc2]
++        doc1 = MagicMock(
++            page_content="chunk one", metadata={"doc_id": "policy", "source_file": "policy.pdf", "page_number": 1}
++        )
++        doc2 = MagicMock(
++            page_content="chunk two", metadata={"doc_id": "policy", "source_file": "policy.pdf", "page_number": 2}
++        )
++        # The scored top-k drives both context and citation scores (MMR no longer used).
++        vs.similarity_search_with_relevance_scores.return_value = [(doc1, 0.8), (doc2, 0.7)]
+         mock_get_vs.return_value = vs
+ 
+         result = retrieve_context({"question": "test", "chat_mode": "strict"})
+         assert result["docs"] == "chunk one\n\nchunk two"
+-        assert result["sources"] == ["policy.pdf"]
+         assert result["best_score"] == 0.8
++        # Structured citations with score/page/snippet (distinct pages → not deduped).
++        labels = [s["label"] for s in result["sources"]]
++        assert labels == ["policy.pdf", "policy.pdf"]
++        assert result["sources"][0] == {
++            "label": "policy.pdf",
++            "doc_id": "policy",
++            "score": 0.8,
++            "page": 1,
++            "snippet": "chunk one",
++        }
+ 
+     @patch("graph.nodes.retrieve_context.get_vectorstore")
+     @patch("graph.nodes.retrieve_context.get_settings")
+@@ -111,7 +120,8 @@ class TestRetrieveContext:
+ 
+         result = retrieve_context({"question": "test", "chat_mode": "open"})
+         assert result["docs"] == "weak match"
+-        assert result["sources"] == ["doc.pdf"]
++        assert result["sources"][0]["label"] == "doc.pdf"
++        assert result["sources"][0]["score"] is None  # weak path has no per-doc score
+         assert result["best_score"] == 0.2
+ 
+     @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")
+diff --git a/tests/test_rate_limiter.py b/tests/test_rate_limiter.py
+index c014fcc..98dd784 100644
+--- a/tests/test_rate_limiter.py
++++ b/tests/test_rate_limiter.py
+@@ -81,13 +81,19 @@ class TestRateLimitMiddleware:
+         client = self._make_app(max_requests=5)
+         resp = client.get("/test")
+         assert resp.status_code == 200
++        # Rate-limit headers are exposed on every response (spec A5).
++        assert resp.headers["X-RateLimit-Limit"] == "5"
++        assert int(resp.headers["X-RateLimit-Remaining"]) == 4
++        assert "X-RateLimit-Reset" in resp.headers
+ 
+     def test_request_exceeds_limit_returns_429(self):
+         client = self._make_app(max_requests=1)
+         client.get("/test")  # first request
+         resp = client.get("/test")  # second request → should be blocked
+         assert resp.status_code == 429
+-        assert resp.json()["error"] == "Too many requests"
++        # problem+json body + Retry-After for intelligent back-off.
++        assert resp.json()["title"] == "Too many requests"
++        assert int(resp.headers["Retry-After"]) >= 1
+ 
+     def test_different_ips_have_separate_limits(self):
+         client = self._make_app(max_requests=1)
+diff --git a/tests/test_synthesized_isolation.py b/tests/test_synthesized_isolation.py
+index db3d3bf..7128f4c 100644
+--- a/tests/test_synthesized_isolation.py
++++ b/tests/test_synthesized_isolation.py
+@@ -51,7 +51,7 @@ class TestRetrievalIsolation:
+ 
+         result = retrieve_context({"question": "q", "chat_mode": "learning"})
+         assert "previously synthesized" in result["docs"]
+-        assert "synthesized:abc" in result["sources"]
++        assert any(s["doc_id"] == "synthesized:abc" for s in result["sources"])
+         synth.similarity_search.assert_called_once()
+ 
+     @patch("graph.nodes.retrieve_context.get_synthesized_vectorstore")

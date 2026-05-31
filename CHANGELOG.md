@@ -6,6 +6,98 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [2.1.0] — 2026-05-31
+
+API ergonomics + a reference web client, plus fixes from an independent code-quality
+audit. Backward compatible: the unversioned `/api/*` endpoints keep their existing
+response shapes (now flagged deprecated); the new typed contract lives under `/api/v1`.
+
+### Added
+
+#### API contract (`/api/v1`)
+
+- **Versioned API** under `/api/v1` with typed Pydantic response envelopes
+  (`schemas/responses.py`): `ChatResponse` (`answer`, structured `sources[]`, `meta`),
+  `IngestResult`, `DocsListResponse`, `DeleteResponse`, `DependencyHealth`.
+- **RFC 9457 `application/problem+json`** error model applied application-wide
+  (`middlewares/errors.py`) — replaces the three inconsistent prior error shapes.
+- **Per-request controls** on `ChatRequest` (all optional): `mode` (strict|open|learning),
+  `lang` (auto|en|ar), `top_k` (1–10), `score_threshold` (0–1) — override server defaults
+  per call without changing config.
+- **Structured citations** — each source carries `label`, `doc_id`, `score`, `page`,
+  `snippet` (v1); legacy `/api/chat` keeps bare label strings.
+- **SSE streaming** — `POST /api/v1/chat/stream` emits `token` → `sources` → `done`
+  (and `error`) as Server-Sent Events; memory persists after the stream.
+- **Async ingestion** — `POST /api/v1/ingest` returns `202` + `Location` and processes in
+  the background (`BackgroundTasks`); poll `GET /api/v1/ingest/status/{doc_id}`.
+- **Pagination** — `GET /api/v1/ingest/docs?limit&cursor` returns `total` + `next_cursor`.
+- **Rate-limit headers** — `X-RateLimit-Limit/Remaining/Reset` on every response and
+  `Retry-After` on `429`.
+- **OpenAPI quality** — `response_model`, tags, summaries, and examples across routes;
+  legacy `/api/*` responses carry `Deprecation`/`Sunset`/`Link` headers.
+
+#### Reference web client (`web/`)
+
+- **Vite + React + TypeScript SPA** — streaming chat (SSE) with a Stop button,
+  per-request mode/language selectors, collapsible structured citations, **RTL/Arabic**
+  rendering (logical CSS properties), accessibility (`aria-live`, keyboard send, focus
+  rings, reduced-motion), and a `/health` status badge. Plain CSS; builds clean
+  (`tsc -b && vite build`), `bun audit` clean.
+
+#### Documentation
+
+- **`user_guidelines.md`** (consumer guide) and **`PTD.md`** (project technical document);
+  README updated for the v1 API, streaming, and web client; `docs/audit/` deliverables.
+
+### Changed
+
+- **App version** → `2.1.0`.
+- **Conversation memory keys** namespaced to `chat:memory:{user_id}` and `X-User-Id`
+  validated (`[A-Za-z0-9_.@-]{1,128}`) so caller-supplied ids cannot collide with
+  operational keys.
+- **Self-ingested (learning) content** now stored in a **separate** Chroma collection
+  (`synthesized_answers`) and consulted only in learning mode — never in strict/open.
+- **Ingest Redis key constants** centralized in `ingest/keys.py`.
+
+### Fixed
+
+- **Critical:** `get_llm()` raised `TypeError` on the real chat/summarize path — it was
+  called with `temperature`/`max_tokens` it didn't accept. Now threads generation params;
+  guarded by an end-to-end graph integration test (`tests/test_graph_integration.py`).
+- **SSRF redirect bypass** — the ingest downloader now sets `allow_redirects=False`, and
+  `validate_download_url()` resolves DNS and blocks hosts resolving to private/reserved
+  IPs (DNS-rebinding defense).
+- **5xx information disclosure** — `RuntimeError`/unhandled handlers no longer echo
+  internal exception text; detail is logged server-side with the correlation id.
+- **Citation source mismatch** — retrieval reads `source_file` (with `source` fallback);
+  real documents no longer surface as `"unknown"`.
+- **`doc_id` derivation** — `removesuffix(".pdf")` instead of `rstrip(".pdf")`.
+- **Dependencies** — added `langchain-google-genai` (provider was importable but
+  undeclared); pinned `langchain-anthropic`/`langchain-groq`; upgraded web `vite` 5→8 to
+  clear dev-server advisories.
+- **CI `test` job** — provisions a `redis:7-alpine` service + explicit env so it no longer
+  depends on a committed `.env`; fixed a rate-limiter test whose patch scope expired
+  before requests ran and a readiness test missing a Redis mock.
+- **MMR regression (this release):** an interim change had replaced
+  `max_marginal_relevance_search` with scored top-k to obtain citation scores. MMR is a
+  deliberate retrieval-quality feature (avoids near-duplicate chunks) and has been
+  **restored**; citation scores are now obtained alongside MMR by joining the scored
+  candidate pool on `chunk_hash`. [regression introduced and fixed within 2.1.0 dev]
+
+### Security
+
+- Independent audit (ruff, bandit, pip-audit, radon, secret scan, pytest+coverage). Fixes
+  above; one residual: `chromadb 1.5.9` **CVE-2026-45829** (pre-auth RCE) has no upstream
+  fix yet — mitigated by embedded (non-server) usage. Track and upgrade when patched; do
+  not expose the Chroma server API on the network. Full reports in `docs/audit/`.
+
+### Removed
+
+- **`.env` / `.coverage`** untracked from git and added to `.gitignore`.
+- **`db.vector.chroma()`** — unused alias of `get_vectorstore()`.
+
+---
+
 ## [2.0.0] — 2026-05-30
 
 Major release: multi-mode chat, self-ingestion, expanded provider support, and security elevation from audit score 72/100 (C+) to 95/100 (A+).

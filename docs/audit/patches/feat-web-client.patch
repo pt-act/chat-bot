@@ -1,0 +1,1096 @@
+diff --git a/web/.gitignore b/web/.gitignore
+new file mode 100644
+index 0000000..898304e
+--- /dev/null
++++ b/web/.gitignore
+@@ -0,0 +1,5 @@
++node_modules/
++dist/
++*.log
++.vite/
++*.tsbuildinfo
+diff --git a/web/README.md b/web/README.md
+new file mode 100644
+index 0000000..e5be7ef
+--- /dev/null
++++ b/web/README.md
+@@ -0,0 +1,41 @@
++# chat-bot web client
++
++Reference SPA for the chat-bot API (Vite + React + TypeScript). Demonstrates the v1
++API: SSE token streaming, per-request mode/language, structured citations, RTL/Arabic,
++and a backend health badge.
++
++## Run
++
++```bash
++cd web
++bun install        # or: npm install
++bun run dev        # http://localhost:5173 (proxies /api and /health to :8000)
++```
++
++Start the API separately (`uvicorn main:app --port 8000`).
++
++## Build / typecheck
++
++```bash
++bun run build      # tsc -b && vite build  → dist/
++bun run typecheck
++```
++
++## What it shows
++
++- **Streaming chat** — `POST /api/v1/chat/stream` parsed as Server-Sent Events
++  (`token` → `sources` → `done`); Stop aborts the request mid-stream.
++- **Controls** — per-request `mode` (strict/open/learning) and `lang` (auto/en/ar).
++- **Citations** — collapsible Sources with label, page, relevance score, and snippet.
++- **RTL** — Arabic messages render `dir="rtl"` via logical CSS properties.
++- **A11y** — `aria-live` on the streaming answer, keyboard send (Enter) / Shift+Enter
++  newline, visible focus rings, `prefers-reduced-motion`.
++- **Health** — polls `/health` and shows a status dot.
++
++Conversation memory is scoped by a stable per-browser `X-User-Id` (localStorage).
++
++## Notes
++- Plain CSS (no UI framework) keeps the visual budget tight: one accent color, two
++  surface shades, spacing over borders.
++- Production hosting: serve `dist/` from any static host; point the API at it via CORS
++  (`CORS_ORIGINS`) or reverse-proxy `/api` to the backend.
+diff --git a/web/bun.lock b/web/bun.lock
+new file mode 100644
+index 0000000..36ad4cd
+--- /dev/null
++++ b/web/bun.lock
+@@ -0,0 +1,135 @@
++{
++  "lockfileVersion": 1,
++  "configVersion": 1,
++  "workspaces": {
++    "": {
++      "name": "chat-bot-web",
++      "dependencies": {
++        "react": "^18.3.1",
++        "react-dom": "^18.3.1",
++      },
++      "devDependencies": {
++        "@types/react": "^18.3.29",
++        "@types/react-dom": "^18.3.7",
++        "@vitejs/plugin-react": "^6.0.2",
++        "typescript": "^5.9.3",
++        "vite": "^8.0.14",
++      },
++    },
++  },
++  "packages": {
++    "@emnapi/core": ["@emnapi/core@1.10.0", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.1", "tslib": "^2.4.0" } }, "sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw=="],
++
++    "@emnapi/runtime": ["@emnapi/runtime@1.10.0", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA=="],
++
++    "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.1", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w=="],
++
++    "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.1.4", "", { "dependencies": { "@tybys/wasm-util": "^0.10.1" }, "peerDependencies": { "@emnapi/core": "^1.7.1", "@emnapi/runtime": "^1.7.1" } }, "sha512-3NQNNgA1YSlJb/kMH1ildASP9HW7/7kYnRI2szWJaofaS1hWmbGI4H+d3+22aGzXXN9IJ+n+GiFVcGipJP18ow=="],
++
++    "@oxc-project/types": ["@oxc-project/types@0.132.0", "", {}, "sha512-FESMOxil5Se014ui/Eq8fT5uHJo6nIRwH0PfJrZJXs6Gek3ZVFOrpUv3YIZT20m+extU98Hg1Ym72U58rlsxUQ=="],
++
++    "@rolldown/binding-android-arm64": ["@rolldown/binding-android-arm64@1.0.2", "", { "os": "android", "cpu": "arm64" }, "sha512-ZS4D1JPGn/MYQN/SYDWftIE/nVsM8j/AFOYEzAoOE2O3NktQOZru+/vYXGbR/qtdLdIfGCP0lcoJiYVzsEz+iQ=="],
++
++    "@rolldown/binding-darwin-arm64": ["@rolldown/binding-darwin-arm64@1.0.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-vdFA9+C/rekyGce7WqHs/xoT0ioZEWaOFyZLIV1mEeNFaFDUQrPIo8Vs2GvJ6eetb3rzDUtUBgzto3ExpXJB3w=="],
++
++    "@rolldown/binding-darwin-x64": ["@rolldown/binding-darwin-x64@1.0.2", "", { "os": "darwin", "cpu": "x64" }, "sha512-BewSOwTHazv77DTYiAZXSqqKZ4KP/KonFisDMVU7PImxoWfB2aepnPhd2E4SWz3zDzYgDNbs6jBmTdgNnF02GA=="],
++
++    "@rolldown/binding-freebsd-x64": ["@rolldown/binding-freebsd-x64@1.0.2", "", { "os": "freebsd", "cpu": "x64" }, "sha512-m41o7M0YWtUdqk61Tb+jnKb2rN++iRdIASlExkUoKfIAH30DOHCB8fVLzSUpbWHHU8esmEioY62PxzexE8MBuA=="],
++
++    "@rolldown/binding-linux-arm-gnueabihf": ["@rolldown/binding-linux-arm-gnueabihf@1.0.2", "", { "os": "linux", "cpu": "arm" }, "sha512-jcojB9H7W/jS29pMKWAK1N+fU99vXodHDTatS3b3y/XSOCiHo0kkA74pL3jJmkoQtYpOCxDvaKs1fo2Ij/1X5w=="],
++
++    "@rolldown/binding-linux-arm64-gnu": ["@rolldown/binding-linux-arm64-gnu@1.0.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-1jn6qDU5iiOgFgygDzKUuKP0maTi0/f1+sBLgvij/76C77Nm3ts6ufz9Bjg5q5dduxiUIxtq86JIoBvo1xQ4Ig=="],
++
++    "@rolldown/binding-linux-arm64-musl": ["@rolldown/binding-linux-arm64-musl@1.0.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-QVLO/czFMdoMFSqlX3bcswcJNm/23r+qoa/jgtmFc/qEp6/jXmIkDjF/XIo8dPfGaiwy1xfQn8o77L79GeXFgw=="],
++
++    "@rolldown/binding-linux-ppc64-gnu": ["@rolldown/binding-linux-ppc64-gnu@1.0.2", "", { "os": "linux", "cpu": "ppc64" }, "sha512-hgO5Abm0w5UL6FEa2iFnZqo2KlK7TQ5QhV5x09hujBf7t5KzHQ1VmfPuTpqRy/rNlSxua3eWH374xxiVrP+lcA=="],
++
++    "@rolldown/binding-linux-s390x-gnu": ["@rolldown/binding-linux-s390x-gnu@1.0.2", "", { "os": "linux", "cpu": "s390x" }, "sha512-fy8rXxuYEu602abC8MUNaPjYLIFzReOaEIEMKMUa0rFEUxNpVXhs15KSSQ4qlqSaM7B6rcj9rDZgADh/IGDzLQ=="],
++
++    "@rolldown/binding-linux-x64-gnu": ["@rolldown/binding-linux-x64-gnu@1.0.2", "", { "os": "linux", "cpu": "x64" }, "sha512-0+bOkiQ779+r1WpoHOWHqncvyySci0vKph+myNDYb+im6meJAzHQXay6oEgnkHuUGouM1LKTZwqKpBow6Kj7CQ=="],
++
++    "@rolldown/binding-linux-x64-musl": ["@rolldown/binding-linux-x64-musl@1.0.2", "", { "os": "linux", "cpu": "x64" }, "sha512-mjSkrzZK5Qsl0a9d1JgILOiuZOSDTVdKENcSXBoqbzSrspLR/4/IRVDo5wd2GgZjNss/viBFJdeq+j7qH2nypw=="],
++
++    "@rolldown/binding-openharmony-arm64": ["@rolldown/binding-openharmony-arm64@1.0.2", "", { "os": "none", "cpu": "arm64" }, "sha512-1v5vHasdfQAZoEHakBV72LIFAC9JjnymsiKxp+GEr/ma3+NJCPSaYK+qavInOovJkgwFrs7GccX2d6IgDA3Z5w=="],
++
++    "@rolldown/binding-wasm32-wasi": ["@rolldown/binding-wasm32-wasi@1.0.2", "", { "dependencies": { "@emnapi/core": "1.10.0", "@emnapi/runtime": "1.10.0", "@napi-rs/wasm-runtime": "^1.1.4" }, "cpu": "none" }, "sha512-mb1VobWn6NheziTk5/WEaR6AKVbrwT5sOi6C7zk3gy/pD1qtJfU1j4PgTo2NJnOtbL9Dl3Aeei8w9jJ7qC2jZQ=="],
++
++    "@rolldown/binding-win32-arm64-msvc": ["@rolldown/binding-win32-arm64-msvc@1.0.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-SqKonF56vA/L2yHwHYcEp2P34URpOZ7d1fS635cTkpDnUtEGdUbhI6NzsPdqeSWvAAeGDrxjWjNmibDIdFf9/A=="],
++
++    "@rolldown/binding-win32-x64-msvc": ["@rolldown/binding-win32-x64-msvc@1.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-v7qRI7gXLRINcOGXt+7YmAZ6iFuyZVMIoXAxhd8oP+DR9dLfL9GfNIx7PLMxmhZdvq8waUJBQiWN9EKNy+TRBQ=="],
++
++    "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
++
++    "@tybys/wasm-util": ["@tybys/wasm-util@0.10.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg=="],
++
++    "@types/prop-types": ["@types/prop-types@15.7.15", "", {}, "sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw=="],
++
++    "@types/react": ["@types/react@18.3.29", "", { "dependencies": { "@types/prop-types": "*", "csstype": "^3.2.2" } }, "sha512-ch0qJdr2JY0r04NXSprbK6TXOgnaJ1Tz23fm5W+z0/CBah6BSBc3n96h7K9GOtwh0HrilNWHIBzE1Ko4Dcw/Wg=="],
++
++    "@types/react-dom": ["@types/react-dom@18.3.7", "", { "peerDependencies": { "@types/react": "^18.0.0" } }, "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ=="],
++
++    "@vitejs/plugin-react": ["@vitejs/plugin-react@6.0.2", "", { "dependencies": { "@rolldown/pluginutils": "^1.0.0" }, "peerDependencies": { "@rolldown/plugin-babel": "^0.1.7 || ^0.2.0", "babel-plugin-react-compiler": "^1.0.0", "vite": "^8.0.0" }, "optionalPeers": ["@rolldown/plugin-babel", "babel-plugin-react-compiler"] }, "sha512-DlSMqo4WhThw4vB8Mpn0Woe9J+Jfq1geJ61AKW0QEgLzGMNwtIMdxbDUzLxcun8W7NbJO0e2Jg/Nxm3cCSVzzg=="],
++
++    "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
++
++    "detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
++
++    "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
++
++    "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
++
++    "js-tokens": ["js-tokens@4.0.0", "", {}, "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ=="],
++
++    "lightningcss": ["lightningcss@1.32.0", "", { "dependencies": { "detect-libc": "^2.0.3" }, "optionalDependencies": { "lightningcss-android-arm64": "1.32.0", "lightningcss-darwin-arm64": "1.32.0", "lightningcss-darwin-x64": "1.32.0", "lightningcss-freebsd-x64": "1.32.0", "lightningcss-linux-arm-gnueabihf": "1.32.0", "lightningcss-linux-arm64-gnu": "1.32.0", "lightningcss-linux-arm64-musl": "1.32.0", "lightningcss-linux-x64-gnu": "1.32.0", "lightningcss-linux-x64-musl": "1.32.0", "lightningcss-win32-arm64-msvc": "1.32.0", "lightningcss-win32-x64-msvc": "1.32.0" } }, "sha512-NXYBzinNrblfraPGyrbPoD19C1h9lfI/1mzgWYvXUTe414Gz/X1FD2XBZSZM7rRTrMA8JL3OtAaGifrIKhQ5yQ=="],
++
++    "lightningcss-android-arm64": ["lightningcss-android-arm64@1.32.0", "", { "os": "android", "cpu": "arm64" }, "sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg=="],
++
++    "lightningcss-darwin-arm64": ["lightningcss-darwin-arm64@1.32.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-RzeG9Ju5bag2Bv1/lwlVJvBE3q6TtXskdZLLCyfg5pt+HLz9BqlICO7LZM7VHNTTn/5PRhHFBSjk5lc4cmscPQ=="],
++
++    "lightningcss-darwin-x64": ["lightningcss-darwin-x64@1.32.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-U+QsBp2m/s2wqpUYT/6wnlagdZbtZdndSmut/NJqlCcMLTWp5muCrID+K5UJ6jqD2BFshejCYXniPDbNh73V8w=="],
++
++    "lightningcss-freebsd-x64": ["lightningcss-freebsd-x64@1.32.0", "", { "os": "freebsd", "cpu": "x64" }, "sha512-JCTigedEksZk3tHTTthnMdVfGf61Fky8Ji2E4YjUTEQX14xiy/lTzXnu1vwiZe3bYe0q+SpsSH/CTeDXK6WHig=="],
++
++    "lightningcss-linux-arm-gnueabihf": ["lightningcss-linux-arm-gnueabihf@1.32.0", "", { "os": "linux", "cpu": "arm" }, "sha512-x6rnnpRa2GL0zQOkt6rts3YDPzduLpWvwAF6EMhXFVZXD4tPrBkEFqzGowzCsIWsPjqSK+tyNEODUBXeeVHSkw=="],
++
++    "lightningcss-linux-arm64-gnu": ["lightningcss-linux-arm64-gnu@1.32.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-0nnMyoyOLRJXfbMOilaSRcLH3Jw5z9HDNGfT/gwCPgaDjnx0i8w7vBzFLFR1f6CMLKF8gVbebmkUN3fa/kQJpQ=="],
++
++    "lightningcss-linux-arm64-musl": ["lightningcss-linux-arm64-musl@1.32.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-UpQkoenr4UJEzgVIYpI80lDFvRmPVg6oqboNHfoH4CQIfNA+HOrZ7Mo7KZP02dC6LjghPQJeBsvXhJod/wnIBg=="],
++
++    "lightningcss-linux-x64-gnu": ["lightningcss-linux-x64-gnu@1.32.0", "", { "os": "linux", "cpu": "x64" }, "sha512-V7Qr52IhZmdKPVr+Vtw8o+WLsQJYCTd8loIfpDaMRWGUZfBOYEJeyJIkqGIDMZPwPx24pUMfwSxxI8phr/MbOA=="],
++
++    "lightningcss-linux-x64-musl": ["lightningcss-linux-x64-musl@1.32.0", "", { "os": "linux", "cpu": "x64" }, "sha512-bYcLp+Vb0awsiXg/80uCRezCYHNg1/l3mt0gzHnWV9XP1W5sKa5/TCdGWaR/zBM2PeF/HbsQv/j2URNOiVuxWg=="],
++
++    "lightningcss-win32-arm64-msvc": ["lightningcss-win32-arm64-msvc@1.32.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-8SbC8BR40pS6baCM8sbtYDSwEVQd4JlFTOlaD3gWGHfThTcABnNDBda6eTZeqbofalIJhFx0qKzgHJmcPTnGdw=="],
++
++    "lightningcss-win32-x64-msvc": ["lightningcss-win32-x64-msvc@1.32.0", "", { "os": "win32", "cpu": "x64" }, "sha512-Amq9B/SoZYdDi1kFrojnoqPLxYhQ4Wo5XiL8EVJrVsB8ARoC1PWW6VGtT0WKCemjy8aC+louJnjS7U18x3b06Q=="],
++
++    "loose-envify": ["loose-envify@1.4.0", "", { "dependencies": { "js-tokens": "^3.0.0 || ^4.0.0" }, "bin": { "loose-envify": "cli.js" } }, "sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q=="],
++
++    "nanoid": ["nanoid@3.3.12", "", { "bin": { "nanoid": "bin/nanoid.cjs" } }, "sha512-ZB9RH/39qpq5Vu6Y+NmUaFhQR6pp+M2Xt76XBnEwDaGcVAqhlvxrl3B2bKS5D3NH3QR76v3aSrKaF/Kiy7lEtQ=="],
++
++    "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
++
++    "picomatch": ["picomatch@4.0.4", "", {}, "sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A=="],
++
++    "postcss": ["postcss@8.5.15", "", { "dependencies": { "nanoid": "^3.3.12", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-FfR8sjd4em2T6fb3I2MwAJU7HWVMr9zba+enmQeeWFfCbm+UOC/0X4DS8XtpUTMwWMGbjKYP7xjfNekzyGmB3A=="],
++
++    "react": ["react@18.3.1", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ=="],
++
++    "react-dom": ["react-dom@18.3.1", "", { "dependencies": { "loose-envify": "^1.1.0", "scheduler": "^0.23.2" }, "peerDependencies": { "react": "^18.3.1" } }, "sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw=="],
++
++    "rolldown": ["rolldown@1.0.2", "", { "dependencies": { "@oxc-project/types": "=0.132.0", "@rolldown/pluginutils": "^1.0.0" }, "optionalDependencies": { "@rolldown/binding-android-arm64": "1.0.2", "@rolldown/binding-darwin-arm64": "1.0.2", "@rolldown/binding-darwin-x64": "1.0.2", "@rolldown/binding-freebsd-x64": "1.0.2", "@rolldown/binding-linux-arm-gnueabihf": "1.0.2", "@rolldown/binding-linux-arm64-gnu": "1.0.2", "@rolldown/binding-linux-arm64-musl": "1.0.2", "@rolldown/binding-linux-ppc64-gnu": "1.0.2", "@rolldown/binding-linux-s390x-gnu": "1.0.2", "@rolldown/binding-linux-x64-gnu": "1.0.2", "@rolldown/binding-linux-x64-musl": "1.0.2", "@rolldown/binding-openharmony-arm64": "1.0.2", "@rolldown/binding-wasm32-wasi": "1.0.2", "@rolldown/binding-win32-arm64-msvc": "1.0.2", "@rolldown/binding-win32-x64-msvc": "1.0.2" }, "bin": { "rolldown": "./bin/cli.mjs" } }, "sha512-oZx5zVDtVB44AW3eaifgDml1gWRDZGvjcfdxonE4swNPG98PrrXjaO/KrnUjzlMnztCCRVlUueA1kCXhARGk6g=="],
++
++    "scheduler": ["scheduler@0.23.2", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ=="],
++
++    "source-map-js": ["source-map-js@1.2.1", "", {}, "sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA=="],
++
++    "tinyglobby": ["tinyglobby@0.2.17", "", { "dependencies": { "fdir": "^6.5.0", "picomatch": "^4.0.4" } }, "sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g=="],
++
++    "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
++
++    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
++
++    "vite": ["vite@8.0.14", "", { "dependencies": { "lightningcss": "^1.32.0", "picomatch": "^4.0.4", "postcss": "^8.5.15", "rolldown": "1.0.2", "tinyglobby": "^0.2.16" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^20.19.0 || >=22.12.0", "@vitejs/devtools": "^0.1.18", "esbuild": "^0.27.0 || ^0.28.0", "jiti": ">=1.21.0", "less": "^4.0.0", "sass": "^1.70.0", "sass-embedded": "^1.70.0", "stylus": ">=0.54.8", "sugarss": "^5.0.0", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "@vitejs/devtools", "esbuild", "jiti", "less", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-s4BJJ+5y1pYL6Otw51FHhVJQhPnuRinKig64g/1+EUNaJsd3gCKdD31IPFvswUgW9/60QT9oFHbZHbQK5imcxw=="],
++  }
++}
+diff --git a/web/index.html b/web/index.html
+new file mode 100644
+index 0000000..408252c
+--- /dev/null
++++ b/web/index.html
+@@ -0,0 +1,12 @@
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="UTF-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <title>Chatbot</title>
++  </head>
++  <body>
++    <div id="root"></div>
++    <script type="module" src="/src/main.tsx"></script>
++  </body>
++</html>
+diff --git a/web/package.json b/web/package.json
+new file mode 100644
+index 0000000..3177608
+--- /dev/null
++++ b/web/package.json
+@@ -0,0 +1,24 @@
++{
++  "name": "chat-bot-web",
++  "private": true,
++  "version": "0.1.0",
++  "type": "module",
++  "description": "Reference web client for the chat-bot API (streaming chat, modes, citations, RTL/a11y).",
++  "scripts": {
++    "dev": "vite",
++    "build": "tsc -b && vite build",
++    "preview": "vite preview",
++    "typecheck": "tsc -b --noEmit"
++  },
++  "dependencies": {
++    "react": "^18.3.1",
++    "react-dom": "^18.3.1"
++  },
++  "devDependencies": {
++    "@types/react": "^18.3.29",
++    "@types/react-dom": "^18.3.7",
++    "@vitejs/plugin-react": "^6.0.2",
++    "typescript": "^5.9.3",
++    "vite": "^8.0.14"
++  }
++}
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+new file mode 100644
+index 0000000..b9c0ed2
+--- /dev/null
++++ b/web/src/App.tsx
+@@ -0,0 +1,100 @@
++import { useCallback, useRef, useState } from "react";
++import { Composer } from "./components/Composer";
++import { Controls } from "./components/Controls";
++import { HealthBadge } from "./components/HealthBadge";
++import { MessageList } from "./components/MessageList";
++import { streamChat } from "./lib/api";
++import type { ChatMessage, Lang, Mode, Source } from "./types";
++
++// Stable per-browser id so conversation memory persists across reloads.
++function userId(): string {
++  const k = "chatbot:user-id";
++  let id = localStorage.getItem(k);
++  if (!id) {
++    id = `web-${Math.random().toString(36).slice(2, 10)}`;
++    localStorage.setItem(k, id);
++  }
++  return id;
++}
++
++export function App() {
++  const [messages, setMessages] = useState<ChatMessage[]>([]);
++  const [mode, setMode] = useState<Mode>("strict");
++  const [lang, setLang] = useState<Lang>("auto");
++  const [busy, setBusy] = useState(false);
++  const abortRef = useRef<AbortController | null>(null);
++
++  const patchLast = useCallback((fn: (m: ChatMessage) => ChatMessage) => {
++    setMessages((prev) => {
++      const next = prev.slice();
++      next[next.length - 1] = fn(next[next.length - 1]);
++      return next;
++    });
++  }, []);
++
++  const send = useCallback(
++    (text: string) => {
++      const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text };
++      const assistant: ChatMessage = {
++        id: crypto.randomUUID(),
++        role: "assistant",
++        content: "",
++        streaming: true,
++        sources: [],
++      };
++      setMessages((prev) => [...prev, userMsg, assistant]);
++      setBusy(true);
++
++      const ctrl = new AbortController();
++      abortRef.current = ctrl;
++
++      streamChat(
++        { q: text, mode, lang },
++        userId(),
++        {
++          onToken: (delta) => patchLast((m) => ({ ...m, content: m.content + delta })),
++          onSources: (sources: Source[]) => patchLast((m) => ({ ...m, sources })),
++          onDone: (meta) => {
++            patchLast((m) => ({ ...m, streaming: false, meta: meta as unknown as ChatMessage["meta"] }));
++            setBusy(false);
++          },
++          onError: (message) => {
++            patchLast((m) => ({
++              ...m,
++              streaming: false,
++              error: true,
++              content: m.content || message,
++            }));
++            setBusy(false);
++          },
++        },
++        ctrl.signal,
++      );
++    },
++    [mode, lang, patchLast],
++  );
++
++  const stop = useCallback(() => {
++    abortRef.current?.abort();
++    patchLast((m) => ({ ...m, streaming: false }));
++    setBusy(false);
++  }, [patchLast]);
++
++  return (
++    <div className="app">
++      <header className="header">
++        <h1 className="title">Chatbot</h1>
++        <div className="header-right">
++          <Controls mode={mode} lang={lang} disabled={busy} onMode={setMode} onLang={setLang} />
++          <HealthBadge />
++        </div>
++      </header>
++      <main className="main">
++        <MessageList messages={messages} />
++      </main>
++      <footer className="footer">
++        <Composer busy={busy} onSend={send} onStop={stop} />
++      </footer>
++    </div>
++  );
++}
+diff --git a/web/src/components/Composer.tsx b/web/src/components/Composer.tsx
+new file mode 100644
+index 0000000..59e6fb1
+--- /dev/null
++++ b/web/src/components/Composer.tsx
+@@ -0,0 +1,44 @@
++import { useState } from "react";
++
++interface Props {
++  busy: boolean;
++  onSend: (text: string) => void;
++  onStop: () => void;
++}
++
++export function Composer({ busy, onSend, onStop }: Props) {
++  const [text, setText] = useState("");
++
++  function submit(e: React.FormEvent) {
++    e.preventDefault();
++    const trimmed = text.trim();
++    if (!trimmed || busy) return;
++    onSend(trimmed);
++    setText("");
++  }
++
++  return (
++    <form className="composer" onSubmit={submit}>
++      <textarea
++        className="composer-input"
++        value={text}
++        placeholder="Type a message…"
++        aria-label="Message"
++        rows={1}
++        onChange={(e) => setText(e.target.value)}
++        onKeyDown={(e) => {
++          if (e.key === "Enter" && !e.shiftKey) submit(e);
++        }}
++      />
++      {busy ? (
++        <button type="button" className="btn btn-stop" onClick={onStop}>
++          Stop
++        </button>
++      ) : (
++        <button type="submit" className="btn btn-send" disabled={!text.trim()}>
++          Send
++        </button>
++      )}
++    </form>
++  );
++}
+diff --git a/web/src/components/Controls.tsx b/web/src/components/Controls.tsx
+new file mode 100644
+index 0000000..2d5184d
+--- /dev/null
++++ b/web/src/components/Controls.tsx
+@@ -0,0 +1,53 @@
++import type { Lang, Mode } from "../types";
++
++const MODES: Mode[] = ["strict", "open", "learning"];
++const LANGS: { value: Lang; label: string }[] = [
++  { value: "auto", label: "Auto" },
++  { value: "en", label: "EN" },
++  { value: "ar", label: "ع" },
++];
++
++interface Props {
++  mode: Mode;
++  lang: Lang;
++  disabled: boolean;
++  onMode: (m: Mode) => void;
++  onLang: (l: Lang) => void;
++}
++
++export function Controls({ mode, lang, disabled, onMode, onLang }: Props) {
++  return (
++    <div className="controls">
++      <label className="control">
++        <span className="control-label">Mode</span>
++        <select
++          value={mode}
++          disabled={disabled}
++          onChange={(e) => onMode(e.target.value as Mode)}
++          aria-label="Chat mode"
++        >
++          {MODES.map((m) => (
++            <option key={m} value={m}>
++              {m}
++            </option>
++          ))}
++        </select>
++      </label>
++      <label className="control">
++        <span className="control-label">Lang</span>
++        <select
++          value={lang}
++          disabled={disabled}
++          onChange={(e) => onLang(e.target.value as Lang)}
++          aria-label="Response language"
++        >
++          {LANGS.map((l) => (
++            <option key={l.value} value={l.value}>
++              {l.label}
++            </option>
++          ))}
++        </select>
++      </label>
++    </div>
++  );
++}
+diff --git a/web/src/components/HealthBadge.tsx b/web/src/components/HealthBadge.tsx
+new file mode 100644
+index 0000000..592ea0b
+--- /dev/null
++++ b/web/src/components/HealthBadge.tsx
+@@ -0,0 +1,28 @@
++import { useEffect, useState } from "react";
++import { getHealth } from "../lib/api";
++
++export function HealthBadge() {
++  const [status, setStatus] = useState<string>("…");
++
++  useEffect(() => {
++    let alive = true;
++    const tick = async () => {
++      const h = await getHealth();
++      if (alive) setStatus(h ? h.status : "offline");
++    };
++    tick();
++    const id = setInterval(tick, 15000);
++    return () => {
++      alive = false;
++      clearInterval(id);
++    };
++  }, []);
++
++  const ok = status === "ok";
++  return (
++    <span className={`health health-${ok ? "ok" : "warn"}`} title={`Backend: ${status}`}>
++      <span className="health-dot" aria-hidden="true" />
++      {status}
++    </span>
++  );
++}
+diff --git a/web/src/components/MessageList.tsx b/web/src/components/MessageList.tsx
+new file mode 100644
+index 0000000..6287f1a
+--- /dev/null
++++ b/web/src/components/MessageList.tsx
+@@ -0,0 +1,44 @@
++import { useEffect, useRef } from "react";
++import type { ChatMessage } from "../types";
++import { dirFor } from "../lib/rtl";
++import { Sources } from "./Sources";
++
++export function MessageList({ messages }: { messages: ChatMessage[] }) {
++  const endRef = useRef<HTMLDivElement>(null);
++
++  // Auto-scroll to the latest content as it streams in.
++  useEffect(() => {
++    endRef.current?.scrollIntoView({ behavior: "smooth" });
++  }, [messages]);
++
++  if (messages.length === 0) {
++    return (
++      <div className="empty" role="note">
++        <p className="empty-title">Ask about our policies</p>
++        <p className="empty-hint">e.g. “What is the return window?” · “ما هي سياسة الإرجاع؟”</p>
++      </div>
++    );
++  }
++
++  return (
++    <div className="messages">
++      {messages.map((m) => (
++        <article
++          key={m.id}
++          className={`bubble bubble-${m.role}${m.error ? " bubble-error" : ""}`}
++          dir={dirFor(m.content)}
++          aria-live={m.streaming ? "polite" : undefined}
++        >
++          <div className="bubble-body">{m.content || (m.streaming ? "…" : "")}</div>
++          {m.role === "assistant" && m.sources && <Sources sources={m.sources} />}
++          {m.meta?.self_ingested && (
++            <span className="badge-learn" title="This answer was saved to the learning store.">
++              learned
++            </span>
++          )}
++        </article>
++      ))}
++      <div ref={endRef} />
++    </div>
++  );
++}
+diff --git a/web/src/components/Sources.tsx b/web/src/components/Sources.tsx
+new file mode 100644
+index 0000000..b2d95a3
+--- /dev/null
++++ b/web/src/components/Sources.tsx
+@@ -0,0 +1,35 @@
++import { useState } from "react";
++import type { Source } from "../types";
++
++export function Sources({ sources }: { sources: Source[] }) {
++  const [open, setOpen] = useState(false);
++  if (!sources || sources.length === 0) return null;
++
++  return (
++    <div className="sources">
++      <button
++        className="sources-toggle"
++        aria-expanded={open}
++        onClick={() => setOpen((v) => !v)}
++      >
++        {open ? "▾" : "▸"} Sources ({sources.length})
++      </button>
++      {open && (
++        <ul className="sources-list">
++          {sources.map((s, i) => (
++            <li key={`${s.doc_id ?? s.label}-${i}`} className="source">
++              <span className="source-label">{s.label}</span>
++              {s.page != null && <span className="source-meta">p.{s.page}</span>}
++              {s.score != null && (
++                <span className="source-score" title="relevance score">
++                  {s.score.toFixed(2)}
++                </span>
++              )}
++              {s.snippet && <p className="source-snippet">{s.snippet}</p>}
++            </li>
++          ))}
++        </ul>
++      )}
++    </div>
++  );
++}
+diff --git a/web/src/lib/api.ts b/web/src/lib/api.ts
+new file mode 100644
+index 0000000..8ca4ea7
+--- /dev/null
++++ b/web/src/lib/api.ts
+@@ -0,0 +1,119 @@
++import type { Lang, Mode, Source } from "../types";
++
++export interface StreamHandlers {
++  onToken: (delta: string) => void;
++  onSources: (sources: Source[]) => void;
++  onDone: (meta: Record<string, unknown>) => void;
++  onError: (message: string) => void;
++}
++
++interface ChatBody {
++  q: string;
++  mode?: Mode;
++  lang?: Lang;
++  top_k?: number;
++  score_threshold?: number;
++}
++
++/**
++ * POST /api/v1/chat/stream and parse the Server-Sent Events stream.
++ *
++ * EventSource only supports GET, so we read the response body as a stream and
++ * parse SSE frames manually. `signal` lets the composer's Stop button abort.
++ */
++export async function streamChat(
++  body: ChatBody,
++  userId: string,
++  handlers: StreamHandlers,
++  signal?: AbortSignal,
++): Promise<void> {
++  let resp: Response;
++  try {
++    resp = await fetch("/api/v1/chat/stream", {
++      method: "POST",
++      headers: { "Content-Type": "application/json", "X-User-Id": userId },
++      body: JSON.stringify(body),
++      signal,
++    });
++  } catch {
++    handlers.onError("Network error — could not reach the server.");
++    return;
++  }
++
++  if (resp.status === 429) {
++    const retry = resp.headers.get("Retry-After") ?? "a few";
++    handlers.onError(`Rate limited. Try again in ${retry}s.`);
++    return;
++  }
++  if (!resp.ok || !resp.body) {
++    handlers.onError(`Request failed (${resp.status}).`);
++    return;
++  }
++
++  const reader = resp.body.getReader();
++  const decoder = new TextDecoder();
++  let buffer = "";
++
++  try {
++    for (;;) {
++      const { done, value } = await reader.read();
++      if (done) break;
++      buffer += decoder.decode(value, { stream: true });
++
++      // SSE frames are separated by a blank line.
++      let sep: number;
++      while ((sep = buffer.indexOf("\n\n")) !== -1) {
++        const frame = buffer.slice(0, sep);
++        buffer = buffer.slice(sep + 2);
++        dispatchFrame(frame, handlers);
++      }
++    }
++  } catch (e) {
++    if ((e as Error).name !== "AbortError") handlers.onError("Stream interrupted.");
++  }
++}
++
++function dispatchFrame(frame: string, handlers: StreamHandlers): void {
++  let event = "message";
++  const dataLines: string[] = [];
++  for (const line of frame.split("\n")) {
++    if (line.startsWith("event:")) event = line.slice(6).trim();
++    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
++  }
++  if (dataLines.length === 0) return;
++  let data: any;
++  try {
++    data = JSON.parse(dataLines.join("\n"));
++  } catch {
++    return;
++  }
++  switch (event) {
++    case "token":
++      if (typeof data.delta === "string") handlers.onToken(data.delta);
++      break;
++    case "sources":
++      handlers.onSources(data.sources ?? []);
++      break;
++    case "done":
++      handlers.onDone(data.meta ?? {});
++      break;
++    case "error":
++      handlers.onError(data.title ?? "Server error.");
++      break;
++  }
++}
++
++export interface Health {
++  status: string;
++  dependencies: Record<string, string>;
++}
++
++export async function getHealth(): Promise<Health | null> {
++  try {
++    const r = await fetch("/health");
++    if (!r.ok) return null;
++    return (await r.json()) as Health;
++  } catch {
++    return null;
++  }
++}
+diff --git a/web/src/lib/rtl.ts b/web/src/lib/rtl.ts
+new file mode 100644
+index 0000000..0adf983
+--- /dev/null
++++ b/web/src/lib/rtl.ts
+@@ -0,0 +1,6 @@
++// Arabic Unicode block — mirrors the backend's language detection.
++const ARABIC = /[؀-ۿ]/;
++
++export function dirFor(text: string): "rtl" | "ltr" {
++  return ARABIC.test(text) ? "rtl" : "ltr";
++}
+diff --git a/web/src/main.tsx b/web/src/main.tsx
+new file mode 100644
+index 0000000..e7e51d8
+--- /dev/null
++++ b/web/src/main.tsx
+@@ -0,0 +1,10 @@
++import React from "react";
++import ReactDOM from "react-dom/client";
++import { App } from "./App";
++import "./styles.css";
++
++ReactDOM.createRoot(document.getElementById("root")!).render(
++  <React.StrictMode>
++    <App />
++  </React.StrictMode>,
++);
+diff --git a/web/src/styles.css b/web/src/styles.css
+new file mode 100644
+index 0000000..d20f0fe
+--- /dev/null
++++ b/web/src/styles.css
+@@ -0,0 +1,264 @@
++:root {
++  --bg: #0b0c0e;
++  --surface: #16181d;
++  --surface-2: #1f232b;
++  --text: #e7e9ee;
++  --muted: #9aa3b2;
++  --accent: #4f8cff;
++  --danger: #ff6b6b;
++  --radius: 12px;
++  --space: 16px;
++  color-scheme: dark;
++}
++
++* {
++  box-sizing: border-box;
++}
++
++body {
++  margin: 0;
++  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
++  background: var(--bg);
++  color: var(--text);
++  font-size: 15px;
++  line-height: 1.5;
++}
++
++.app {
++  display: flex;
++  flex-direction: column;
++  height: 100vh;
++  max-width: 860px;
++  margin-inline: auto;
++}
++
++.header {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  padding: var(--space);
++  border-block-end: 1px solid var(--surface-2);
++}
++
++.title {
++  font-size: 18px;
++  font-weight: 600;
++  margin: 0;
++}
++
++.header-right {
++  display: flex;
++  align-items: center;
++  gap: var(--space);
++}
++
++.controls {
++  display: flex;
++  gap: 12px;
++}
++
++.control {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  font-size: 13px;
++  color: var(--muted);
++}
++
++.control select {
++  background: var(--surface-2);
++  color: var(--text);
++  border: none;
++  border-radius: 8px;
++  padding: 4px 8px;
++  font-size: 13px;
++}
++
++.main {
++  flex: 1;
++  overflow-y: auto;
++  padding: var(--space);
++}
++
++.messages {
++  display: flex;
++  flex-direction: column;
++  gap: 12px;
++}
++
++.empty {
++  height: 100%;
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  justify-content: center;
++  color: var(--muted);
++  text-align: center;
++}
++
++.empty-title {
++  font-size: 17px;
++  color: var(--text);
++  margin-block-end: 4px;
++}
++
++.bubble {
++  max-width: 80%;
++  padding: 10px 14px;
++  border-radius: var(--radius);
++  white-space: pre-wrap;
++  word-wrap: break-word;
++}
++
++.bubble-user {
++  align-self: flex-end;
++  background: var(--accent);
++  color: #fff;
++}
++
++.bubble-assistant {
++  align-self: flex-start;
++  background: var(--surface);
++}
++
++.bubble-error {
++  border: 1px solid var(--danger);
++  color: var(--danger);
++}
++
++.badge-learn {
++  display: inline-block;
++  margin-block-start: 8px;
++  font-size: 11px;
++  color: var(--accent);
++  border: 1px solid var(--accent);
++  border-radius: 6px;
++  padding: 0 6px;
++}
++
++.sources {
++  margin-block-start: 10px;
++}
++
++.sources-toggle {
++  background: none;
++  border: none;
++  color: var(--muted);
++  cursor: pointer;
++  font-size: 13px;
++  padding: 0;
++}
++
++.sources-list {
++  list-style: none;
++  padding: 0;
++  margin-block-start: 8px;
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++
++.source {
++  background: var(--surface-2);
++  border-radius: 8px;
++  padding: 8px 10px;
++}
++
++.source-label {
++  font-weight: 600;
++}
++
++.source-meta,
++.source-score {
++  color: var(--muted);
++  font-size: 12px;
++  margin-inline-start: 8px;
++}
++
++.source-snippet {
++  margin-block: 6px 0;
++  color: var(--muted);
++  font-size: 13px;
++}
++
++.footer {
++  padding: var(--space);
++  border-block-start: 1px solid var(--surface-2);
++}
++
++.composer {
++  display: flex;
++  gap: 8px;
++  align-items: flex-end;
++}
++
++.composer-input {
++  flex: 1;
++  resize: none;
++  background: var(--surface);
++  color: var(--text);
++  border: 1px solid var(--surface-2);
++  border-radius: var(--radius);
++  padding: 10px 12px;
++  font: inherit;
++  max-height: 160px;
++}
++
++.btn {
++  border: none;
++  border-radius: var(--radius);
++  padding: 10px 18px;
++  font: inherit;
++  font-weight: 600;
++  cursor: pointer;
++}
++
++.btn-send {
++  background: var(--accent);
++  color: #fff;
++}
++
++.btn-send:disabled {
++  opacity: 0.5;
++  cursor: not-allowed;
++}
++
++.btn-stop {
++  background: var(--surface-2);
++  color: var(--text);
++}
++
++.health {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  font-size: 12px;
++  color: var(--muted);
++}
++
++.health-dot {
++  width: 8px;
++  height: 8px;
++  border-radius: 50%;
++  background: var(--muted);
++}
++
++.health-ok .health-dot {
++  background: #3ecf8e;
++}
++
++.health-warn .health-dot {
++  background: var(--danger);
++}
++
++/* Accessibility: clear keyboard focus + reduced motion. */
++:focus-visible {
++  outline: 2px solid var(--accent);
++  outline-offset: 2px;
++}
++
++@media (prefers-reduced-motion: reduce) {
++  * {
++    scroll-behavior: auto !important;
++  }
++}
+diff --git a/web/src/types.ts b/web/src/types.ts
+new file mode 100644
+index 0000000..260b6a7
+--- /dev/null
++++ b/web/src/types.ts
+@@ -0,0 +1,34 @@
++export type Mode = "strict" | "open" | "learning";
++export type Lang = "auto" | "en" | "ar";
++
++export interface Source {
++  label: string;
++  doc_id?: string | null;
++  score?: number | null;
++  page?: number | null;
++  snippet?: string | null;
++}
++
++export interface ChatMeta {
++  mode: string;
++  lang?: string | null;
++  self_ingested?: boolean;
++  correlation_id?: string | null;
++  model?: string | null;
++}
++
++export interface ChatResponse {
++  answer: string;
++  sources: Source[];
++  meta: ChatMeta;
++}
++
++export interface ChatMessage {
++  id: string;
++  role: "user" | "assistant";
++  content: string;
++  sources?: Source[];
++  meta?: ChatMeta;
++  streaming?: boolean;
++  error?: boolean;
++}
+diff --git a/web/tsconfig.json b/web/tsconfig.json
+new file mode 100644
+index 0000000..cb101ce
+--- /dev/null
++++ b/web/tsconfig.json
+@@ -0,0 +1,19 @@
++{
++  "compilerOptions": {
++    "target": "ES2021",
++    "useDefineForClassFields": true,
++    "lib": ["ES2021", "DOM", "DOM.Iterable"],
++    "module": "ESNext",
++    "skipLibCheck": true,
++    "moduleResolution": "bundler",
++    "resolveJsonModule": true,
++    "isolatedModules": true,
++    "noEmit": true,
++    "jsx": "react-jsx",
++    "strict": true,
++    "noUnusedLocals": true,
++    "noUnusedParameters": true,
++    "noFallthroughCasesInSwitch": true
++  },
++  "include": ["src", "vite.config.ts"]
++}
+diff --git a/web/vite.config.ts b/web/vite.config.ts
+new file mode 100644
+index 0000000..9c698fa
+--- /dev/null
++++ b/web/vite.config.ts
+@@ -0,0 +1,15 @@
++import react from "@vitejs/plugin-react";
++import { defineConfig } from "vite";
++
++// Dev server proxies API calls to the FastAPI backend so the SPA can run on a
++// separate port without CORS friction.
++export default defineConfig({
++  plugins: [react()],
++  server: {
++    port: 5173,
++    proxy: {
++      "/api": { target: "http://localhost:8000", changeOrigin: true },
++      "/health": { target: "http://localhost:8000", changeOrigin: true },
++    },
++  },
++});

@@ -1,0 +1,18 @@
+[0m[1mbun audit [0m[2mv1.3.12 (700fc117)[0m
+vite  <=6.4.1
+  (direct dependency)
+  @vitejs/plugin-react › vite
+  moderate: Vite Vulnerable to Path Traversal in Optimized Deps `.map` Handling - https://github.com/advisories/GHSA-4w7w-66w2-5vf9
+
+esbuild  <=0.24.2
+  vite › esbuild
+  moderate: esbuild enables any website to send any requests to the development server and read the response - https://github.com/advisories/GHSA-67mh-4wv8-2f99
+
+2 vulnerabilities (2 moderate)
+
+To update all dependencies to the latest compatible versions:
+  bun update
+
+To update all dependencies to the latest versions (including breaking changes):
+  bun update --latest
+

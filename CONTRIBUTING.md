@@ -89,7 +89,8 @@ docs: add changelog
 
 ### Testing
 
-- 120+ tests across 7 files, 97% coverage
+- 178 tests, ~97% coverage (unit, API/contract, streaming, async-ingest, and an
+  end-to-end graph integration test); hermetic via `fakeredis` + mocked boundaries
 - Each provider, mode, and security control has dedicated test coverage
 - Use `fakeredis` for Redis mocking, `MagicMock`/`patch` for external service mocking
 - Test new features in isolation before integration
@@ -101,29 +102,35 @@ docs: add changelog
 
 ```
 chat-bot/
-├── controllers/          # Route handler logic
-├── middlewares/          # Auth, rate limiting, observability, logging
-├── db/                   # Redis and ChromaDB clients
+├── controllers/
+│   ├── {chat,ingest}_controller.py  # Legacy /api routes (deprecated, back-compat)
+│   └── v1/                          # Typed /api/v1 routes (chat + SSE stream, ingest)
+├── middlewares/          # Auth, rate limiting, observability, problem+json errors, logging
+├── db/                   # Redis (+ memory_key) and ChromaDB clients
 ├── graph/
-│   ├── builder.py        # LangGraph pipeline (7 nodes + edges)
-│   ├── state.py          # State TypedDict (chat_mode, best_score, last_answer, self_ingested)
+│   ├── builder.py        # LangGraph pipeline (6 nodes + edges)
+│   ├── state.py          # State TypedDict (chat_mode, best_score, lang, top_k, ...)
 │   └── nodes/            # Individual graph nodes (one file per node)
-├── ingest/               # Incremental document ingestion with diff logic
+├── ingest/               # Incremental ingestion (policies.py) + Redis key constants (keys.py)
 ├── prompts/
 │   ├── answer.py         # 3 mode-specific prompt builders
 │   └── summarize.py      # Conversation summarization prompt
-├── schemas/              # Pydantic v2 request/response models
-├── services/             # Business logic layer
+├── schemas/              # Pydantic v2 models — chat, ingest, responses (envelopes + problem)
+├── services/             # Business logic layer (conversation, stream_conversation, ingest)
 ├── utils/
 │   ├── llm_adapter.py    # 14-provider LLM adapter with aliases
 │   ├── embedding_adapter.py # 3-provider embedding adapter + FASTEMBED_MODELS registry
-│   └── security.py       # SSRF protection (private IP + metadata blocking)
-├── tests/                # 7 test files, 120+ tests, 97% coverage
+│   └── security.py       # SSRF protection (private IP/metadata + DNS-rebinding)
+├── web/                  # Reference SPA (Vite + React + TS): streaming chat, RTL, a11y
+├── docs/audit/           # Audit reports, patches, and tool evidence
+├── tests/                # 178 tests, ~97% coverage
 ├── main.py               # App entrypoint, middleware wiring, health/ready endpoints
 ├── config.py             # Pydantic Settings with validators
 ├── pyproject.toml        # Ruff + pytest config
 ├── CHANGELOG.md          # Version history
 ├── CONTRIBUTING.md       # This file
+├── PTD.md                # Project technical document
+├── user_guidelines.md    # End-user / API-consumer guide
 └── .env.example          # Configuration template with documentation
 ```
 

@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Chatbot API",
-    version="1.1.0",
+    version="2.1.0",
     description=(
         "RAG chatbot API. Versioned endpoints live under `/api/v1` and return typed "
         "envelopes; errors use RFC 9457 (application/problem+json). The unversioned "

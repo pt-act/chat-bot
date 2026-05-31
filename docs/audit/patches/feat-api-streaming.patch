@@ -1,0 +1,293 @@
+diff --git a/controllers/v1/chat.py b/controllers/v1/chat.py
+index db07686..0fd5ec5 100644
+--- a/controllers/v1/chat.py
++++ b/controllers/v1/chat.py
+@@ -1,20 +1,26 @@
+-"""v1 chat controller — typed response envelope (ChatResponse)."""
++"""v1 chat controller — typed response envelope (ChatResponse) + SSE streaming."""
+ 
++import json
+ import logging
+ 
+ from fastapi import APIRouter, Header, HTTPException
++from fastapi.responses import StreamingResponse
+ 
+ from config import get_settings
+ from controllers.chat_controller import _validate_user_id
+ from middlewares.observability import correlation_id_var
+ from schemas.chat import ChatRequest
+ from schemas.responses import ChatMeta, ChatResponse, Source
+-from services.chat_service import conversation
++from services.chat_service import conversation, stream_conversation
+ 
+ logger = logging.getLogger(__name__)
+ router = APIRouter(tags=["chat"])
+ 
+ 
++def _sse(event: str, data: dict) -> str:
++    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
++
++
+ @router.post(
+     "/chat",
+     response_model=ChatResponse,
+@@ -65,3 +71,40 @@ def _to_source(s) -> Source:
+     if isinstance(s, dict):
+         return Source(**{k: v for k, v in s.items() if k in Source.model_fields})
+     return Source(label=str(s))
++
++
++@router.post(
++    "/chat/stream",
++    summary="Ask the bot a question (streaming, SSE)",
++    description=(
++        "Same as `POST /chat` but streams the answer as Server-Sent Events: "
++        "`token` (incremental deltas), then `sources`, then `done` (meta). On failure "
++        "an `error` event is emitted."
++    ),
++    responses={200: {"content": {"text/event-stream": {}}}},
++)
++def chat_stream(request: ChatRequest, x_user_id: str = Header(default="anonymous")) -> StreamingResponse:
++    user_id = _validate_user_id(x_user_id)
++
++    def event_gen():
++        try:
++            for event, data in stream_conversation(
++                user_id=user_id,
++                q=request.q,
++                mode=request.mode,
++                lang=request.lang,
++                top_k=request.top_k,
++                score_threshold=request.score_threshold,
++            ):
++                if event == "done":
++                    data["meta"]["correlation_id"] = correlation_id_var.get() or None
++                yield _sse(event, data)
++        except Exception:
++            logger.exception("Streaming chat failed for user %s", user_id)
++            yield _sse("error", {"title": "Internal server error", "status": 500})
++
++    return StreamingResponse(
++        event_gen(),
++        media_type="text/event-stream",
++        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
++    )
+diff --git a/graph/nodes/generate_answer.py b/graph/nodes/generate_answer.py
+index 6c353cc..c3614c6 100644
+--- a/graph/nodes/generate_answer.py
++++ b/graph/nodes/generate_answer.py
+@@ -28,7 +28,12 @@ def _resolve_language(state, question: str) -> str:
+     return _LANG_LABELS.get(requested, _response_language(question))
+ 
+ 
+-def generate_answer(state):
++def build_chat_prompt(state) -> tuple[str, str]:
++    """Build the answer prompt and resolved language for a state.
++
++    Shared by the synchronous node (generate_answer) and the streaming path
++    (services.chat_service.stream_conversation) so prompt construction stays DRY.
++    """
+     summary = state.get("summary", "")
+     messages = state.get("messages") or []
+     docs = state.get("docs", "")
+@@ -47,6 +52,15 @@ def generate_answer(state):
+         lang=lang,
+         chat_mode=chat_mode,
+     )
++    return prompt, lang
++
++
++def generate_answer(state):
++    messages = state.get("messages") or []
++    question = state["question"]
++    chat_mode = state.get("chat_mode", "strict")
++
++    prompt, lang = build_chat_prompt(state)
+ 
+     response = _get_chat().invoke(prompt)
+     logger.info("Generated answer for user %s (lang=%s, mode=%s)", state.get("user_id"), lang, chat_mode)
+diff --git a/services/chat_service.py b/services/chat_service.py
+index c4742c9..fec879d 100644
+--- a/services/chat_service.py
++++ b/services/chat_service.py
+@@ -1,11 +1,36 @@
++import logging
++from collections.abc import Iterator
+ from functools import lru_cache
+ 
++from langchain_core.messages import AIMessage, HumanMessage
++
+ from config import get_settings
+ from graph.builder import build_graph
++from graph.nodes.generate_answer import build_chat_prompt
++from graph.nodes.load_memory import load_memory
++from graph.nodes.retrieve_context import retrieve_context
++from graph.nodes.self_ingest import self_ingest
++from graph.nodes.store_memory import store_memory
++from graph.nodes.summarize import summarize
++from utils.llm_adapter import get_llm
++
++logger = logging.getLogger(__name__)
+ 
+ _graph = lru_cache(maxsize=1)(build_graph)
+ 
+ 
++def _initial_state(user_id, q, mode, lang, top_k, score_threshold) -> dict:
++    chat_mode = (mode or get_settings().chat_mode).lower()
++    state: dict = {"user_id": user_id, "question": q, "chat_mode": chat_mode}
++    if lang and lang != "auto":
++        state["lang"] = lang
++    if top_k is not None:
++        state["top_k"] = top_k
++    if score_threshold is not None:
++        state["score_threshold"] = score_threshold
++    return state
++
++
+ def conversation(
+     user_id: str,
+     q: str,
+@@ -19,15 +44,7 @@ def conversation(
+     `mode`/`lang`/`top_k`/`score_threshold` are optional per-request overrides;
+     when omitted the server defaults (config) and auto language detection apply.
+     """
+-    chat_mode = (mode or get_settings().chat_mode).lower()
+-    state: dict = {"user_id": user_id, "question": q, "chat_mode": chat_mode}
+-    if lang and lang != "auto":
+-        state["lang"] = lang
+-    if top_k is not None:
+-        state["top_k"] = top_k
+-    if score_threshold is not None:
+-        state["score_threshold"] = score_threshold
+-
++    state = _initial_state(user_id, q, mode, lang, top_k, score_threshold)
+     result = _graph().invoke(state)
+ 
+     resolved = result.get("lang")  # "English"/"Arabic" set by generate_answer
+@@ -37,3 +54,61 @@ def conversation(
+         "self_ingested": result.get("self_ingested", False),
+         "lang": "ar" if resolved == "Arabic" else "en",
+     }
++
++
++def stream_conversation(
++    user_id: str,
++    q: str,
++    mode: str | None = None,
++    lang: str = "auto",
++    top_k: int | None = None,
++    score_threshold: float | None = None,
++) -> Iterator[tuple[str, dict]]:
++    """Yield (event, data) pairs for a streaming chat turn.
++
++    Pre-steps (load memory, retrieve context) run synchronously; the LLM answer is
++    streamed token-by-token; post-steps (self-ingest, summarize, store memory) run
++    after the stream so memory is persisted even though the client saw tokens first.
++
++    Events: ``token`` {delta}, ``sources`` {sources}, ``done`` {meta}. Errors are
++    surfaced by the caller as an ``error`` event.
++    """
++    state = _initial_state(user_id, q, mode, lang, top_k, score_threshold)
++    state.update(load_memory(state))
++    state.update(retrieve_context(state))
++
++    prompt, resolved_lang = build_chat_prompt(state)
++
++    parts: list[str] = []
++    for chunk in get_llm(temperature=0, max_tokens=512).stream(prompt):
++        delta = getattr(chunk, "content", "") or ""
++        if delta:
++            parts.append(delta)
++            yield "token", {"delta": delta}
++    answer = "".join(parts)
++
++    # Reconstruct the state generate_answer would have produced, then run post-steps.
++    state["messages"] = (state.get("messages") or []) + [HumanMessage(content=q), AIMessage(content=answer)]
++    state["last_answer"] = answer
++    state["lang"] = resolved_lang
++
++    yield "sources", {"sources": state.get("sources", [])}
++
++    try:
++        state.update(self_ingest(state))
++        state.update(summarize(state))
++        store_memory(state)
++    except Exception:  # pragma: no cover - defensive; never fail the stream on post-steps
++        logger.exception("Streaming post-steps failed for user %s", user_id)
++
++    yield (
++        "done",
++        {
++            "meta": {
++                "mode": state["chat_mode"],
++                "lang": "ar" if resolved_lang == "Arabic" else "en",
++                "self_ingested": state.get("self_ingested", False),
++                "model": get_settings().llm_model,
++            }
++        },
++    )
+diff --git a/tests/test_streaming.py b/tests/test_streaming.py
+new file mode 100644
+index 0000000..2342387
+--- /dev/null
++++ b/tests/test_streaming.py
+@@ -0,0 +1,59 @@
++"""Tests for the SSE streaming chat endpoint (spec A3)."""
++
++from types import SimpleNamespace
++from unittest.mock import MagicMock, patch
++
++import fakeredis
++from fastapi.testclient import TestClient
++
++import main as main_module
++
++
++def _fake_stream_llm(*deltas):
++    llm = MagicMock()
++    llm.stream.return_value = [SimpleNamespace(content=d) for d in deltas]
++    return llm
++
++
++def _client():
++    with patch("middlewares.rate_limiter.get_redis", return_value=fakeredis.FakeRedis(decode_responses=True)):
++        return TestClient(main_module.app)
++
++
++def test_chat_stream_emits_tokens_sources_done():
++    redis = fakeredis.FakeRedis(decode_responses=True)
++    vs = MagicMock()
++    vs.similarity_search_with_relevance_scores.return_value = []  # strict, no docs
++
++    with (
++        patch("services.chat_service.get_llm", return_value=_fake_stream_llm("Hello", ", ", "world")),
++        patch("graph.nodes.load_memory.get_redis", return_value=redis),
++        patch("graph.nodes.store_memory.get_redis", return_value=redis),
++        patch("graph.nodes.retrieve_context.get_vectorstore", return_value=vs),
++    ):
++        resp = _client().post("/api/v1/chat/stream", json={"q": "hi"})
++        assert resp.status_code == 200
++        assert resp.headers["content-type"].startswith("text/event-stream")
++        body = resp.text
++
++    # ≥2 token events, then sources, then done (in order).
++    assert body.count("event: token") == 3
++    assert '"delta": "Hello"' in body
++    assert "event: sources" in body
++    assert "event: done" in body
++    assert body.index("event: token") < body.index("event: sources") < body.index("event: done")
++    # memory persisted under the namespaced key despite streaming
++    assert redis.get("chat:memory:anonymous") is not None
++
++
++def test_chat_stream_emits_error_event_on_failure():
++    with patch("services.chat_service.get_llm", side_effect=RuntimeError("boom")):
++        resp = _client().post("/api/v1/chat/stream", json={"q": "hi"})
++        assert resp.status_code == 200  # stream opened, error delivered in-band
++        assert "event: error" in resp.text
++        assert "boom" not in resp.text  # internal detail not leaked
++
++
++def test_chat_stream_validates_body():
++    resp = _client().post("/api/v1/chat/stream", json={"q": ""})
++    assert resp.status_code == 422

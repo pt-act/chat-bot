@@ -1,0 +1,636 @@
+diff --git a/controllers/v1/__init__.py b/controllers/v1/__init__.py
+new file mode 100644
+index 0000000..bb8b1f9
+--- /dev/null
++++ b/controllers/v1/__init__.py
+@@ -0,0 +1 @@
++"""Versioned (v1) API controllers."""
+diff --git a/controllers/v1/chat.py b/controllers/v1/chat.py
+new file mode 100644
+index 0000000..36aebcb
+--- /dev/null
++++ b/controllers/v1/chat.py
+@@ -0,0 +1,50 @@
++"""v1 chat controller — typed response envelope (ChatResponse)."""
++
++import logging
++
++from fastapi import APIRouter, Header, HTTPException
++
++from config import get_settings
++from controllers.chat_controller import _validate_user_id
++from middlewares.observability import correlation_id_var
++from schemas.chat import ChatRequest
++from schemas.responses import ChatMeta, ChatResponse, Source
++from services.chat_service import conversation
++
++logger = logging.getLogger(__name__)
++router = APIRouter(tags=["chat"])
++
++
++@router.post(
++    "/chat",
++    response_model=ChatResponse,
++    summary="Ask the bot a question",
++    description=(
++        "Runs the RAG pipeline and returns the answer with structured citations and "
++        "response metadata (mode, model, correlation id, self-ingest flag)."
++    ),
++)
++def chat(request: ChatRequest, x_user_id: str = Header(default="anonymous")) -> ChatResponse:
++    user_id = _validate_user_id(x_user_id)
++    settings = get_settings()
++    try:
++        result = conversation(user_id=user_id, q=request.q)
++    except ValueError as e:
++        logger.warning("Chat validation error for user %s: %s", user_id, e)
++        raise HTTPException(status_code=400, detail=str(e)) from e
++    except RuntimeError as e:
++        logger.error("Chat runtime error for user %s: %s", user_id, e)
++        raise HTTPException(status_code=500, detail="Failed to generate a response") from e
++
++    logger.info("Chat response generated for user %s", user_id)
++    sources = [s if isinstance(s, Source) else Source(label=str(s)) for s in result.get("sources", [])]
++    return ChatResponse(
++        answer=result["answer"],
++        sources=sources,
++        meta=ChatMeta(
++            mode=settings.chat_mode.lower(),
++            self_ingested=result.get("self_ingested", False),
++            correlation_id=correlation_id_var.get() or None,
++            model=settings.llm_model,
++        ),
++    )
+diff --git a/controllers/v1/ingest.py b/controllers/v1/ingest.py
+new file mode 100644
+index 0000000..2bb31b7
+--- /dev/null
++++ b/controllers/v1/ingest.py
+@@ -0,0 +1,86 @@
++"""v1 ingest controller — typed envelopes (IngestResult / DocsListResponse / DeleteResponse)."""
++
++import logging
++
++from fastapi import APIRouter, Depends, HTTPException
++
++from db.redis_client import get_redis
++from db.vector import delete_chunks_by_ids, get_chunks_by_doc_id, get_vectorstore
++from ingest.keys import ALL_DOCS_KEY, CONTENT_HASHES_KEY, doc_chunks_key, ingest_status_key
++from middlewares.auth import require_api_key
++from schemas.ingest import IngestRequest
++from schemas.responses import DeleteResponse, DocsListResponse, IngestResult
++from services.ingest_service import ingest_file
++
++logger = logging.getLogger(__name__)
++router = APIRouter(tags=["ingest"])
++
++
++@router.post(
++    "/ingest",
++    response_model=IngestResult,
++    dependencies=[Depends(require_api_key)],
++    summary="Ingest a policy PDF",
++)
++def ingest(request: IngestRequest) -> IngestResult:
++    try:
++        result = ingest_file(request.file_name, str(request.s3_url))
++    except ValueError as e:
++        logger.warning("Ingest validation failed for %s: %s", request.file_name, e)
++        raise HTTPException(status_code=400, detail=str(e)) from e
++    except RuntimeError as e:
++        logger.error("Ingest runtime error for %s: %s", request.file_name, e)
++        raise HTTPException(status_code=500, detail="Failed to ingest file") from e
++    return IngestResult(**result)
++
++
++@router.get("/ingest/status/{doc_id}", response_model=IngestResult, summary="Get ingest status")
++def ingest_status(doc_id: str) -> IngestResult:
++    redis = get_redis()
++    status = redis.hgetall(ingest_status_key(doc_id))
++    if not status:
++        raise HTTPException(status_code=404, detail=f"No record found for '{doc_id}'")
++    return IngestResult(doc_id=doc_id, **{k: v for k, v in status.items() if k in IngestResult.model_fields})
++
++
++@router.get(
++    "/ingest/docs",
++    response_model=DocsListResponse,
++    dependencies=[Depends(require_api_key)],
++    summary="List ingested documents",
++)
++def list_docs() -> DocsListResponse:
++    redis = get_redis()
++    doc_ids = redis.smembers(ALL_DOCS_KEY)
++    docs = [redis.hgetall(ingest_status_key(doc_id)) for doc_id in doc_ids]
++    return DocsListResponse(total=len(docs), docs=docs, next_cursor=None)
++
++
++@router.delete(
++    "/ingest/{doc_id}",
++    response_model=DeleteResponse,
++    dependencies=[Depends(require_api_key)],
++    summary="Delete an ingested document",
++)
++def delete_doc(doc_id: str) -> DeleteResponse:
++    redis = get_redis()
++    status = redis.hgetall(ingest_status_key(doc_id))
++    if not status:
++        raise HTTPException(status_code=404, detail=f"No record found for '{doc_id}'")
++
++    vs = get_vectorstore()
++    results = get_chunks_by_doc_id(vs, doc_id)
++    if results["ids"]:
++        delete_chunks_by_ids(vs, results["ids"])
++        logger.info("Deleted %d chunks from ChromaDB for %s", len(results["ids"]), doc_id)
++
++    file_hash = status.get("file_hash")
++    if file_hash:
++        redis.hdel(CONTENT_HASHES_KEY, file_hash)
++
++    redis.delete(ingest_status_key(doc_id))
++    redis.delete(doc_chunks_key(doc_id))
++    redis.srem(ALL_DOCS_KEY, doc_id)
++
++    logger.info("Deleted document %s", doc_id)
++    return DeleteResponse(status="deleted", doc_id=doc_id)
+diff --git a/main.py b/main.py
+index 1fd7831..898f100 100644
+--- a/main.py
++++ b/main.py
+@@ -2,15 +2,18 @@ import logging
+ from contextlib import asynccontextmanager
+ 
+ from fastapi import FastAPI, Request
+-from fastapi.exceptions import RequestValidationError
+ from fastapi.middleware.cors import CORSMiddleware
+ from fastapi.responses import JSONResponse
++from starlette.middleware.base import BaseHTTPMiddleware
+ 
+ from config import get_settings
+-from controllers.chat_controller import router as chat_router
+-from controllers.ingest_controller import router as ingest_router
++from controllers.chat_controller import router as legacy_chat_router
++from controllers.ingest_controller import router as legacy_ingest_router
++from controllers.v1.chat import router as v1_chat_router
++from controllers.v1.ingest import router as v1_ingest_router
+ from db.redis_client import get_redis
+ from db.vector import get_vectorstore
++from middlewares.errors import register_error_handlers
+ from middlewares.logging_setup import setup_logging
+ from middlewares.observability import (
+     CorrelationIdFilter,
+@@ -18,6 +21,7 @@ from middlewares.observability import (
+     RequestTimingMiddleware,
+ )
+ from middlewares.rate_limiter import RateLimitMiddleware
++from schemas.responses import DependencyHealth
+ 
+ settings = get_settings()
+ setup_logging(settings.log_level, settings.log_format)
+@@ -30,6 +34,11 @@ logger = logging.getLogger(__name__)
+ _redis_ok = False
+ _chroma_ok = False
+ 
++# Legacy unversioned prefix kept for one deprecation cycle; new clients use /api/v1.
++_LEGACY_PREFIX = "/api"
++_V1_PREFIX = "/api/v1"
++_SUNSET = "Sat, 01 Nov 2025 00:00:00 GMT"
++
+ 
+ @asynccontextmanager
+ async def lifespan(app: FastAPI):
+@@ -56,11 +65,41 @@ async def lifespan(app: FastAPI):
+     logger.info("Shutting down...")
+ 
+ 
+-app = FastAPI(title="Chatbot API", version="1.0.0", lifespan=lifespan)
++app = FastAPI(
++    title="Chatbot API",
++    version="1.1.0",
++    description=(
++        "RAG chatbot API. Versioned endpoints live under `/api/v1` and return typed "
++        "envelopes; errors use RFC 9457 (application/problem+json). The unversioned "
++        "`/api` paths are deprecated and kept for one cycle."
++    ),
++    license_info={"name": "MIT"},
++    openapi_tags=[
++        {"name": "chat", "description": "Conversational RAG endpoints."},
++        {"name": "ingest", "description": "Document ingestion and management."},
++        {"name": "system", "description": "Health and readiness probes."},
++    ],
++    lifespan=lifespan,
++)
++
++
++class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
++    """Mark legacy unversioned `/api/*` responses as deprecated (RFC 8594)."""
++
++    async def dispatch(self, request: Request, call_next):
++        response = await call_next(request)
++        path = request.url.path
++        if path.startswith(_LEGACY_PREFIX + "/") and not path.startswith(_V1_PREFIX):
++            response.headers["Deprecation"] = "true"
++            response.headers["Sunset"] = _SUNSET
++            response.headers["Link"] = f'<{_V1_PREFIX}>; rel="successor-version"'
++        return response
++
+ 
+ # Observability (outermost — captures everything)
+ app.add_middleware(CorrelationIdMiddleware)
+ app.add_middleware(RequestTimingMiddleware)
++app.add_middleware(DeprecationHeaderMiddleware)
+ 
+ # Rate limiting
+ app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
+@@ -74,44 +113,24 @@ app.add_middleware(
+     allow_headers=["*"],
+ )
+ 
+-app.include_router(ingest_router, prefix="/api")
+-app.include_router(chat_router, prefix="/api")
+-
+-
+-@app.exception_handler(RequestValidationError)
+-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+-    errors = [{"field": e["loc"][-1], "message": e["msg"]} for e in exc.errors()]
+-    return JSONResponse(status_code=422, content={"error": "Validation failed", "details": errors})
+-
+-
+-@app.exception_handler(ValueError)
+-async def value_error_handler(request: Request, exc: ValueError):
+-    logger.warning("Value error on %s %s: %s", request.method, request.url.path, exc)
+-    return JSONResponse(status_code=400, content={"error": "Bad request", "detail": str(exc)})
+-
+-
+-@app.exception_handler(RuntimeError)
+-async def runtime_error_handler(request: Request, exc: RuntimeError):
+-    # Log the full detail server-side, but never echo internal error text to the
+-    # client — it can leak file paths, upstream messages, or infra detail.
+-    logger.error("Runtime error on %s %s: %s", request.method, request.url.path, exc)
+-    return JSONResponse(status_code=500, content={"error": "Internal server error"})
+-
++# v1 (typed envelopes) + legacy (unversioned, deprecated)
++app.include_router(v1_ingest_router, prefix=_V1_PREFIX)
++app.include_router(v1_chat_router, prefix=_V1_PREFIX)
++app.include_router(legacy_ingest_router, prefix=_LEGACY_PREFIX)
++app.include_router(legacy_chat_router, prefix=_LEGACY_PREFIX)
+ 
+-@app.exception_handler(Exception)
+-async def generic_exception_handler(request: Request, exc: Exception):
+-    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+-    return JSONResponse(status_code=500, content={"error": "Internal server error"})
++# Unified RFC 9457 problem+json error model (application-wide)
++register_error_handlers(app)
+ 
+ 
+-@app.get("/health")
++@app.get("/health", response_model=DependencyHealth, tags=["system"])
+ def health_check():
+     deps = {"redis": "ok" if _redis_ok else "unavailable", "chromadb": "ok" if _chroma_ok else "unavailable"}
+     status = "ok" if (_redis_ok and _chroma_ok) else "degraded"
+     return {"status": status, "dependencies": deps}
+ 
+ 
+-@app.get("/ready")
++@app.get("/ready", tags=["system"])
+ def readiness_check():
+     """Live readiness probe — checks actual connectivity right now."""
+     deps = {}
+@@ -138,6 +157,6 @@ def readiness_check():
+     )
+ 
+ 
+-@app.get("/")
++@app.get("/", tags=["system"])
+ def home():
+     return {"message": "Chatbot Running"}
+diff --git a/middlewares/errors.py b/middlewares/errors.py
+new file mode 100644
+index 0000000..42cf069
+--- /dev/null
++++ b/middlewares/errors.py
+@@ -0,0 +1,70 @@
++"""RFC 9457 (problem+json) error model, applied application-wide.
++
++Replaces the previously inconsistent error bodies ({"error","detail"},
++{"error","details"}, FastAPI's {"detail"}) with a single, documented shape. 5xx
++responses never echo internal exception text (see audit finding M-3); full detail is
++logged server-side with the request correlation id.
++"""
++
++import logging
++
++from fastapi import FastAPI, HTTPException, Request
++from fastapi.exceptions import RequestValidationError
++from fastapi.responses import JSONResponse
++
++from middlewares.observability import correlation_id_var
++
++logger = logging.getLogger(__name__)
++
++_PROBLEM_CONTENT_TYPE = "application/problem+json"
++_TYPE_BASE = "https://errors.chat-bot"
++
++
++def problem_response(
++    status: int,
++    title: str,
++    detail: str | None = None,
++    type_: str = "about:blank",
++    errors: list[dict] | None = None,
++) -> JSONResponse:
++    body = {
++        "type": type_,
++        "title": title,
++        "status": status,
++        "detail": detail,
++        "correlation_id": correlation_id_var.get() or None,
++        "errors": errors,
++    }
++    # Drop null optional members for a tidy payload.
++    body = {k: v for k, v in body.items() if v is not None}
++    return JSONResponse(status_code=status, content=body, media_type=_PROBLEM_CONTENT_TYPE)
++
++
++def register_error_handlers(app: FastAPI) -> None:
++    @app.exception_handler(RequestValidationError)
++    async def _validation(request: Request, exc: RequestValidationError):
++        errors = [{"field": e["loc"][-1], "message": e["msg"]} for e in exc.errors()]
++        return problem_response(422, "Validation failed", type_=f"{_TYPE_BASE}/validation", errors=errors)
++
++    @app.exception_handler(HTTPException)
++    async def _http(request: Request, exc: HTTPException):
++        # Preserve caller-provided status/detail (4xx are safe; controllers already
++        # genericize their own 5xx detail before raising).
++        title = "Error" if exc.status_code >= 500 else "Request failed"
++        return problem_response(exc.status_code, title, detail=str(exc.detail))
++
++    @app.exception_handler(ValueError)
++    async def _value(request: Request, exc: ValueError):
++        logger.warning("Value error on %s %s: %s", request.method, request.url.path, exc)
++        return problem_response(400, "Bad request", detail=str(exc), type_=f"{_TYPE_BASE}/bad-request")
++
++    @app.exception_handler(RuntimeError)
++    async def _runtime(request: Request, exc: RuntimeError):
++        # Log detail server-side; never echo internal text to the client (M-3).
++        logger.error("Runtime error on %s %s: %s", request.method, request.url.path, exc)
++        return problem_response(500, "Internal server error")
++
++    @app.exception_handler(Exception)
++    async def _unhandled(request: Request, exc: Exception):
++        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
++        return problem_response(500, "Internal server error")
+diff --git a/schemas/responses.py b/schemas/responses.py
+new file mode 100644
+index 0000000..c2782d1
+--- /dev/null
++++ b/schemas/responses.py
+@@ -0,0 +1,76 @@
++"""Typed response models for the v1 API.
++
++Centralizes the success envelope and the RFC 9457 (problem+json) error model so
++clients have a single, self-describing contract and OpenAPI/SDK codegen is accurate.
++"""
++
++from pydantic import BaseModel, Field
++
++
++class Source(BaseModel):
++    """A single retrieved citation backing an answer."""
++
++    label: str = Field(examples=["return_policy.pdf"])
++    doc_id: str | None = Field(default=None, examples=["return_policy"])
++    score: float | None = Field(default=None, ge=0, le=1, examples=[0.82])
++    page: int | None = Field(default=None, examples=[3])
++    snippet: str | None = Field(default=None, examples=["Customers may return any item..."])
++
++
++class TokenUsage(BaseModel):
++    prompt_tokens: int | None = None
++    completion_tokens: int | None = None
++
++
++class ChatMeta(BaseModel):
++    mode: str = Field(examples=["strict"])
++    lang: str | None = Field(default=None, examples=["en"])
++    self_ingested: bool = False
++    correlation_id: str | None = None
++    model: str | None = Field(default=None, examples=["gpt-4o-mini"])
++    usage: TokenUsage | None = None
++
++
++class ChatResponse(BaseModel):
++    answer: str = Field(examples=["Returns are accepted within 30 days of purchase."])
++    sources: list[Source] = []
++    meta: ChatMeta
++
++
++class IngestResult(BaseModel):
++    doc_id: str
++    status: str = Field(examples=["done", "queued", "skipped"])
++    version: str | None = None
++    added: int | None = None
++    removed: int | None = None
++    total: int | None = None
++    reason: str | None = None
++
++
++class DocsListResponse(BaseModel):
++    total: int
++    docs: list[dict]
++    next_cursor: str | None = Field(
++        default=None, description="Opaque cursor for the next page, or null when exhausted."
++    )
++
++
++class DeleteResponse(BaseModel):
++    status: str = Field(examples=["deleted"])
++    doc_id: str
++
++
++class DependencyHealth(BaseModel):
++    status: str = Field(examples=["ok", "degraded"])
++    dependencies: dict[str, str] = Field(examples=[{"redis": "ok", "chromadb": "ok"}])
++
++
++class ProblemDetail(BaseModel):
++    """RFC 9457 problem+json error body."""
++
++    type: str = Field(default="about:blank", examples=["https://errors.chat-bot/validation"])
++    title: str = Field(examples=["Validation failed"])
++    status: int = Field(examples=[422])
++    detail: str | None = Field(default=None, examples=["Question cannot be empty"])
++    correlation_id: str | None = None
++    errors: list[dict] | None = Field(default=None, description="Field-level validation errors, when applicable.")
+diff --git a/tests/test_api.py b/tests/test_api.py
+index 6b483f0..b5b14c8 100644
+--- a/tests/test_api.py
++++ b/tests/test_api.py
+@@ -196,10 +196,12 @@ class TestAuthMiddleware:
+ 
+ 
+ class TestValidationErrorHandler:
+-    def test_validation_error_returns_structured_details(self):
++    def test_validation_error_returns_problem_json(self):
+         with _make_app() as client:
+             resp = client.post("/api/chat", json={"q": ""})
++            assert resp.status_code == 422
+             data = resp.json()
+-            assert "error" in data
+-            assert data["error"] == "Validation failed"
+-            assert "details" in data
++            # RFC 9457 problem+json shape (middlewares/errors.py)
++            assert data["title"] == "Validation failed"
++            assert data["status"] == 422
++            assert any(e["field"] == "q" for e in data["errors"])
+diff --git a/tests/test_api_v1.py b/tests/test_api_v1.py
+new file mode 100644
+index 0000000..81c1013
+--- /dev/null
++++ b/tests/test_api_v1.py
+@@ -0,0 +1,79 @@
++"""Tests for the v1 API contract: typed envelopes, problem+json, deprecation header."""
++
++from unittest.mock import patch
++
++import fakeredis
++from fastapi.testclient import TestClient
++
++import main as main_module
++
++
++def _client():
++    with patch("middlewares.rate_limiter.get_redis", return_value=fakeredis.FakeRedis(decode_responses=True)):
++        return TestClient(main_module.app)
++
++
++class TestV1ChatEnvelope:
++    @patch("controllers.v1.chat.conversation")
++    def test_chat_returns_typed_envelope(self, mock_conv):
++        mock_conv.return_value = {
++            "answer": "Returns within 30 days.",
++            "sources": ["return_policy.pdf"],
++            "self_ingested": False,
++        }
++        resp = _client().post("/api/v1/chat", json={"q": "return policy?"})
++        assert resp.status_code == 200
++        body = resp.json()
++        assert body["answer"] == "Returns within 30 days."
++        assert body["sources"][0]["label"] == "return_policy.pdf"
++        assert body["meta"]["mode"] in {"strict", "open", "learning"}
++        assert "self_ingested" in body["meta"]
++        # No legacy fields leak into v1.
++        assert "data" not in body and "status" not in body
++
++    @patch("controllers.v1.chat.conversation")
++    def test_invalid_user_id_problem_json(self, mock_conv):
++        resp = _client().post("/api/v1/chat", json={"q": "hi"}, headers={"x-user-id": "bad id"})
++        assert resp.status_code == 400
++        assert resp.json()["title"] == "Request failed"
++
++
++class TestLegacyDeprecation:
++    @patch("controllers.chat_controller.conversation")
++    def test_legacy_still_works_and_is_marked_deprecated(self, mock_conv):
++        mock_conv.return_value = {"answer": "x", "sources": []}
++        resp = _client().post("/api/chat", json={"q": "hi"})
++        assert resp.status_code == 200
++        # legacy envelope preserved
++        assert resp.json()["status"] == "success"
++        assert resp.json()["data"] == "x"
++        # ...but flagged deprecated
++        assert resp.headers.get("Deprecation") == "true"
++        assert "successor-version" in resp.headers.get("Link", "")
++
++    def test_v1_is_not_marked_deprecated(self):
++        # health is unversioned/system; v1 chat path should not carry deprecation
++        with patch(
++            "controllers.v1.chat.conversation", return_value={"answer": "x", "sources": [], "self_ingested": False}
++        ):
++            resp = _client().post("/api/v1/chat", json={"q": "hi"})
++        assert "Deprecation" not in resp.headers
++
++
++class TestProblemJson:
++    def test_validation_is_problem_json(self):
++        resp = _client().post("/api/v1/chat", json={"q": ""})
++        assert resp.status_code == 422
++        body = resp.json()
++        assert body["title"] == "Validation failed"
++        assert body["status"] == 422
++        assert any(e["field"] == "q" for e in body["errors"])
++
++
++class TestOpenAPI:
++    def test_v1_routes_documented(self):
++        spec = _client().get("/openapi.json").json()
++        assert "/api/v1/chat" in spec["paths"]
++        assert "/api/v1/ingest" in spec["paths"]
++        # ChatResponse model is referenced (typed envelope)
++        assert "ChatResponse" in spec["components"]["schemas"]
+diff --git a/tests/test_main.py b/tests/test_main.py
+index 5ab27cb..313f0de 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -49,40 +49,42 @@ class TestLifespan:
+ 
+ 
+ class TestExceptionHandlers:
+-    def test_value_error_returns_400(self):
++    """The unified RFC 9457 (problem+json) error model — see middlewares/errors.py."""
++
++    def _app_with_handlers(self):
+         from fastapi import FastAPI
+ 
++        from middlewares.errors import register_error_handlers
++
+         app = FastAPI()
++        register_error_handlers(app)
++        return app
++
++    def test_value_error_returns_problem_400(self):
++        app = self._app_with_handlers()
+ 
+         @app.get("/error")
+-        def raise_value_error():
++        def boom():
+             raise ValueError("bad input")
+ 
+-        # Copy handlers from main
+-        app.exception_handler(ValueError)(main_module.value_error_handler)
+-
+-        client = TestClient(app)
+-        resp = client.get("/error")
++        resp = TestClient(app, raise_server_exceptions=False).get("/error")
+         assert resp.status_code == 400
+-        assert "bad input" in resp.json()["detail"]
+-
+-    def test_runtime_error_returns_500(self):
+-        from fastapi import FastAPI
++        body = resp.json()
++        assert body["title"] == "Bad request"
++        assert body["status"] == 400
++        assert "bad input" in body["detail"]
+ 
+-        app = FastAPI()
++    def test_runtime_error_returns_generic_problem_500(self):
++        app = self._app_with_handlers()
+ 
+         @app.get("/error")
+-        def raise_runtime_error():
++        def boom():
+             raise RuntimeError("system failure")
+ 
+-        # Copy handlers from main
+-        app.exception_handler(RuntimeError)(main_module.runtime_error_handler)
+-
+-        client = TestClient(app)
+-        resp = client.get("/error")
++        resp = TestClient(app, raise_server_exceptions=False).get("/error")
+         assert resp.status_code == 500
+         # The internal exception message must NOT be echoed to the client (M-3).
+         body = resp.json()
+         assert "system failure" not in str(body)
+-        assert body["error"] == "Internal server error"
++        assert body["title"] == "Internal server error"
+         assert "detail" not in body

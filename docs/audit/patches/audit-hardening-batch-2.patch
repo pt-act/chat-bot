@@ -1,0 +1,457 @@
+diff --git a/controllers/chat_controller.py b/controllers/chat_controller.py
+index f45522b..ef7f03f 100644
+--- a/controllers/chat_controller.py
++++ b/controllers/chat_controller.py
+@@ -1,4 +1,5 @@
+ import logging
++import re
+ 
+ from fastapi import APIRouter, Header, HTTPException
+ 
+@@ -8,22 +9,42 @@ from services.chat_service import conversation
+ logger = logging.getLogger(__name__)
+ router = APIRouter()
+ 
++# X-User-Id is used to scope per-user conversation memory. Constrain it to a safe,
++# bounded character set so a caller cannot craft a value that breaks key namespacing
++# or bloats Redis. Memory keys are additionally namespaced (see db.redis_client).
++_USER_ID_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
++
++
++def _validate_user_id(x_user_id: str) -> str:
++    user_id = (x_user_id or "").strip()
++    if not user_id:
++        return "anonymous"
++    if not _USER_ID_RE.match(user_id):
++        raise HTTPException(
++            status_code=400,
++            detail="Invalid X-User-Id: use 1-128 chars from [A-Za-z0-9_.@-]",
++        )
++    return user_id
++
+ 
+ @router.post("/chat")
+ def chat_controller(
+     request: ChatRequest,
+     x_user_id: str = Header(default="anonymous"),
+ ):
++    user_id = _validate_user_id(x_user_id)
+     try:
+-        result = conversation(user_id=x_user_id, q=request.q)
+-        logger.info("Chat response generated for user %s", x_user_id)
++        result = conversation(user_id=user_id, q=request.q)
++        logger.info("Chat response generated for user %s", user_id)
+         return {"status": "success", "data": result["answer"], "sources": result["sources"]}
+     except ValueError as e:
+-        logger.warning("Chat validation error for user %s: %s", x_user_id, e)
++        # 4xx validation feedback is safe to surface to the caller.
++        logger.warning("Chat validation error for user %s: %s", user_id, e)
+         raise HTTPException(status_code=400, detail=str(e)) from e
+     except RuntimeError as e:
+-        logger.error("Chat runtime error for user %s: %s", x_user_id, e)
+-        raise HTTPException(status_code=500, detail=str(e)) from e
++        # Log detail server-side; return a generic message (no internal text leak).
++        logger.error("Chat runtime error for user %s: %s", user_id, e)
++        raise HTTPException(status_code=500, detail="Failed to generate a response") from e
+     except Exception:
+-        logger.exception("Chat failed for user %s", x_user_id)
++        logger.exception("Chat failed for user %s", user_id)
+         raise HTTPException(status_code=500, detail="Failed to generate a response")
+diff --git a/controllers/ingest_controller.py b/controllers/ingest_controller.py
+index 898aef0..b1725ee 100644
+--- a/controllers/ingest_controller.py
++++ b/controllers/ingest_controller.py
+@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
+ 
+ from db.redis_client import get_redis
+ from db.vector import delete_chunks_by_ids, get_chunks_by_doc_id, get_vectorstore
++from ingest.keys import ALL_DOCS_KEY, CONTENT_HASHES_KEY, doc_chunks_key, ingest_status_key
+ from middlewares.auth import require_api_key
+ from schemas.ingest import IngestRequest
+ from services.ingest_service import ingest_file
+@@ -21,8 +22,9 @@ def ingest_controller(request: IngestRequest):
+         logger.warning("Ingest validation failed for %s: %s", request.file_name, e)
+         raise HTTPException(status_code=400, detail=str(e)) from e
+     except RuntimeError as e:
++        # Log detail server-side; return a generic message (no internal text leak).
+         logger.error("Ingest runtime error for %s: %s", request.file_name, e)
+-        raise HTTPException(status_code=500, detail=str(e)) from e
++        raise HTTPException(status_code=500, detail="Failed to ingest file") from e
+     except Exception:
+         logger.exception("Ingest failed for %s", request.file_name)
+         raise HTTPException(status_code=500, detail="Failed to ingest file")
+@@ -31,7 +33,7 @@ def ingest_controller(request: IngestRequest):
+ @router.get("/ingest/status/{doc_id}")
+ def ingest_status(doc_id: str):
+     redis = get_redis()
+-    status = redis.hgetall(f"ingest_status:{doc_id}")
++    status = redis.hgetall(ingest_status_key(doc_id))
+     if not status:
+         raise HTTPException(status_code=404, detail=f"No record found for '{doc_id}'")
+     return status
+@@ -40,15 +42,15 @@ def ingest_status(doc_id: str):
+ @router.get("/ingest/docs", dependencies=[Depends(require_api_key)])
+ def list_docs():
+     redis = get_redis()
+-    doc_ids = redis.smembers(_ALL_DOCS_KEY)
+-    docs = [redis.hgetall(f"ingest_status:{doc_id}") for doc_id in doc_ids]
++    doc_ids = redis.smembers(ALL_DOCS_KEY)
++    docs = [redis.hgetall(ingest_status_key(doc_id)) for doc_id in doc_ids]
+     return {"total": len(docs), "docs": docs}
+ 
+ 
+ @router.delete("/ingest/{doc_id}", dependencies=[Depends(require_api_key)])
+ def delete_doc(doc_id: str):
+     redis = get_redis()
+-    status = redis.hgetall(f"ingest_status:{doc_id}")
++    status = redis.hgetall(ingest_status_key(doc_id))
+     if not status:
+         raise HTTPException(status_code=404, detail=f"No record found for '{doc_id}'")
+ 
+@@ -60,15 +62,11 @@ def delete_doc(doc_id: str):
+ 
+     file_hash = status.get("file_hash")
+     if file_hash:
+-        redis.hdel(_CONTENT_HASHES_KEY, file_hash)
++        redis.hdel(CONTENT_HASHES_KEY, file_hash)
+ 
+-    redis.delete(f"ingest_status:{doc_id}")
+-    redis.delete(f"doc_chunks:{doc_id}")
+-    redis.srem(_ALL_DOCS_KEY, doc_id)
++    redis.delete(ingest_status_key(doc_id))
++    redis.delete(doc_chunks_key(doc_id))
++    redis.srem(ALL_DOCS_KEY, doc_id)
+ 
+     logger.info("Deleted document %s", doc_id)
+     return {"status": "deleted", "doc_id": doc_id}
+-
+-
+-_ALL_DOCS_KEY = "ingest:doc_ids"
+-_CONTENT_HASHES_KEY = "ingest:content_hashes"
+diff --git a/db/redis_client.py b/db/redis_client.py
+index 51c4f50..599c89b 100644
+--- a/db/redis_client.py
++++ b/db/redis_client.py
+@@ -4,6 +4,15 @@ import redis as _redis
+ 
+ from config import get_settings
+ 
++# Namespace prefix for per-user conversation memory. Keeps user-controlled ids
++# from colliding with operational keys (e.g. "ingest:doc_ids", "rate_limit:*").
++_MEMORY_PREFIX = "chat:memory:"
++
++
++def memory_key(user_id: str) -> str:
++    """Return the namespaced Redis key for a user's conversation memory."""
++    return f"{_MEMORY_PREFIX}{user_id}"
++
+ 
+ @lru_cache
+ def get_redis() -> _redis.Redis:
+diff --git a/db/vector.py b/db/vector.py
+index cb1c135..0247a79 100644
+--- a/db/vector.py
++++ b/db/vector.py
+@@ -14,10 +14,6 @@ def get_vectorstore() -> Chroma:
+     )
+ 
+ 
+-def chroma() -> Chroma:
+-    return get_vectorstore()
+-
+-
+ class VectorStoreRepository:
+     """
+     Thin adapter around ChromaDB to isolate private _collection API usage.
+diff --git a/graph/nodes/__init__.py b/graph/nodes/__init__.py
+index c92ff74..0dcf6a0 100644
+--- a/graph/nodes/__init__.py
++++ b/graph/nodes/__init__.py
+@@ -4,6 +4,7 @@ __all__ = [
+     "generate_answer",
+     "load_memory",
+     "retrieve_context",
++    "self_ingest",
+     "store_memory",
+     "summarize",
+ ]
+diff --git a/graph/nodes/load_memory.py b/graph/nodes/load_memory.py
+index c5ef70f..a10a825 100644
+--- a/graph/nodes/load_memory.py
++++ b/graph/nodes/load_memory.py
+@@ -3,7 +3,7 @@ import logging
+ 
+ from langchain_core.messages import AIMessage, HumanMessage
+ 
+-from db.redis_client import get_redis
++from db.redis_client import get_redis, memory_key
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
+ def load_memory(state):
+     redis = get_redis()
+     user_id = state["user_id"]
+-    data = redis.get(user_id)
++    data = redis.get(memory_key(user_id))
+ 
+     if not data:
+         return {"messages": [], "summary": ""}
+diff --git a/graph/nodes/store_memory.py b/graph/nodes/store_memory.py
+index 3f2c315..fcdc524 100644
+--- a/graph/nodes/store_memory.py
++++ b/graph/nodes/store_memory.py
+@@ -4,7 +4,7 @@ import logging
+ from langchain_core.messages import AIMessage, HumanMessage
+ 
+ from config import get_settings
+-from db.redis_client import get_redis
++from db.redis_client import get_redis, memory_key
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -26,7 +26,7 @@ def store_memory(state):
+     }
+ 
+     ttl = get_settings().redis_ttl_seconds
+-    redis.set(state["user_id"], json.dumps(data), ex=ttl)
++    redis.set(memory_key(state["user_id"]), json.dumps(data), ex=ttl)
+     logger.info("Stored memory for user %s (TTL=%ds)", state["user_id"], ttl)
+ 
+     return state
+diff --git a/ingest/keys.py b/ingest/keys.py
+new file mode 100644
+index 0000000..2493655
+--- /dev/null
++++ b/ingest/keys.py
+@@ -0,0 +1,16 @@
++"""Single source of truth for ingest-related Redis keys.
++
++Previously these constants were duplicated in ingest/policies.py and
++controllers/ingest_controller.py, which risked the two drifting apart.
++"""
++
++ALL_DOCS_KEY = "ingest:doc_ids"
++CONTENT_HASHES_KEY = "ingest:content_hashes"
++
++
++def ingest_status_key(doc_id: str) -> str:
++    return f"ingest_status:{doc_id}"
++
++
++def doc_chunks_key(doc_id: str) -> str:
++    return f"doc_chunks:{doc_id}"
+diff --git a/ingest/policies.py b/ingest/policies.py
+index 397a5d1..103bc7e 100644
+--- a/ingest/policies.py
++++ b/ingest/policies.py
+@@ -13,13 +13,11 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
+ from config import get_settings
+ from db.redis_client import get_redis
+ from db.vector import VectorStoreRepository, get_vectorstore
++from ingest.keys import ALL_DOCS_KEY, CONTENT_HASHES_KEY, doc_chunks_key, ingest_status_key
+ from utils.security import SSRFError, validate_download_url
+ 
+ logger = logging.getLogger(__name__)
+ 
+-_ALL_DOCS_KEY = "ingest:doc_ids"
+-_CONTENT_HASHES_KEY = "ingest:content_hashes"
+-
+ 
+ def _file_hash(file_path: str) -> str:
+     h = hashlib.sha256()
+@@ -74,7 +72,7 @@ def _download_file(s3_url: str, file_name: str) -> str:
+ 
+ 
+ def _check_duplicate_content(redis_client, new_file_hash: str, doc_id: str) -> dict | None:
+-    existing_doc_id = redis_client.hget(_CONTENT_HASHES_KEY, new_file_hash)
++    existing_doc_id = redis_client.hget(CONTENT_HASHES_KEY, new_file_hash)
+     if existing_doc_id and existing_doc_id != doc_id:
+         return {
+             "doc_id": doc_id,
+@@ -165,18 +163,18 @@ def _persist_ingest_status(
+     version: str,
+     file_name: str,
+ ):
+-    redis_client.delete(f"doc_chunks:{doc_id}")
++    redis_client.delete(doc_chunks_key(doc_id))
+     if new_hashes:
+-        redis_client.sadd(f"doc_chunks:{doc_id}", *new_hashes)
++        redis_client.sadd(doc_chunks_key(doc_id), *new_hashes)
+ 
+-    redis_client.sadd(_ALL_DOCS_KEY, doc_id)
++    redis_client.sadd(ALL_DOCS_KEY, doc_id)
+ 
+     if stored_file_hash:
+-        redis_client.hdel(_CONTENT_HASHES_KEY, stored_file_hash)
+-    redis_client.hset(_CONTENT_HASHES_KEY, new_file_hash, doc_id)
++        redis_client.hdel(CONTENT_HASHES_KEY, stored_file_hash)
++    redis_client.hset(CONTENT_HASHES_KEY, new_file_hash, doc_id)
+ 
+     redis_client.hset(
+-        f"ingest_status:{doc_id}",
++        ingest_status_key(doc_id),
+         mapping={
+             "file_hash": new_file_hash,
+             "file_name": file_name,
+@@ -202,7 +200,7 @@ def process_policy(file_name: str, s3_url: str) -> dict:
+         file_path = _download_file(s3_url, file_name)
+ 
+         new_file_hash = _file_hash(file_path)
+-        stored_file_hash = redis_client.hget(f"ingest_status:{doc_id}", "file_hash")
++        stored_file_hash = redis_client.hget(ingest_status_key(doc_id), "file_hash")
+ 
+         if stored_file_hash == new_file_hash:
+             logger.info("Skipping %s — file unchanged", doc_id)
+@@ -217,7 +215,7 @@ def process_policy(file_name: str, s3_url: str) -> dict:
+         new_chunks, new_hashes = _build_chunks(file_path, doc_id, file_name, new_file_hash, version)
+ 
+         repo = VectorStoreRepository(get_vectorstore())
+-        old_hashes = redis_client.smembers(f"doc_chunks:{doc_id}")
++        old_hashes = redis_client.smembers(doc_chunks_key(doc_id))
+ 
+         added, removed = _sync_vectorstore(repo, redis_client, doc_id, new_chunks, new_hashes, old_hashes)
+ 
+@@ -250,7 +248,7 @@ def process_policy(file_name: str, s3_url: str) -> dict:
+         raise
+     except Exception as e:
+         redis_client.hset(
+-            f"ingest_status:{doc_id}",
++            ingest_status_key(doc_id),
+             mapping={
+                 "status": "failed",
+                 "error": str(e),
+diff --git a/main.py b/main.py
+index f22df03..1fd7831 100644
+--- a/main.py
++++ b/main.py
+@@ -92,8 +92,10 @@ async def value_error_handler(request: Request, exc: ValueError):
+ 
+ @app.exception_handler(RuntimeError)
+ async def runtime_error_handler(request: Request, exc: RuntimeError):
++    # Log the full detail server-side, but never echo internal error text to the
++    # client — it can leak file paths, upstream messages, or infra detail.
+     logger.error("Runtime error on %s %s: %s", request.method, request.url.path, exc)
+-    return JSONResponse(status_code=500, content={"error": "Internal server error", "detail": str(exc)})
++    return JSONResponse(status_code=500, content={"error": "Internal server error"})
+ 
+ 
+ @app.exception_handler(Exception)
+diff --git a/tests/test_audit_fixes_2.py b/tests/test_audit_fixes_2.py
+new file mode 100644
+index 0000000..1513f54
+--- /dev/null
++++ b/tests/test_audit_fixes_2.py
+@@ -0,0 +1,98 @@
++"""Regression tests for the second hardening batch (M-3, M-4, I-1/I-2)."""
++
++import json
++from unittest.mock import MagicMock, patch
++
++import fakeredis
++from fastapi.testclient import TestClient
++from langchain_core.messages import AIMessage, HumanMessage
++
++import main as main_module
++from db.redis_client import memory_key
++from graph.nodes.load_memory import load_memory
++from graph.nodes.store_memory import store_memory
++
++
++def _client():
++    with patch("middlewares.rate_limiter.get_redis", return_value=fakeredis.FakeRedis(decode_responses=True)):
++        return TestClient(main_module.app)
++
++
++# ── M-4: X-User-Id validation ────────────────────────────────────────────────
++class TestUserIdValidation:
++    @patch("controllers.chat_controller.conversation")
++    def test_valid_user_id_passes_through(self, mock_conv):
++        mock_conv.return_value = {"answer": "hi", "sources": []}
++        resp = _client().post("/api/chat", json={"q": "hello"}, headers={"x-user-id": "user.name-1@x"})
++        assert resp.status_code == 200
++        mock_conv.assert_called_once_with(user_id="user.name-1@x", q="hello")
++
++    def test_invalid_user_id_rejected(self):
++        # spaces / control chars / namespace separators are not allowed
++        for bad in ["bad id", "ingest:doc_ids", "a/b", "x" * 129]:
++            resp = _client().post("/api/chat", json={"q": "hello"}, headers={"x-user-id": bad})
++            assert resp.status_code == 400, bad
++
++    @patch("controllers.chat_controller.conversation")
++    def test_blank_user_id_defaults_to_anonymous(self, mock_conv):
++        mock_conv.return_value = {"answer": "hi", "sources": []}
++        resp = _client().post("/api/chat", json={"q": "hello"}, headers={"x-user-id": "   "})
++        assert resp.status_code == 200
++        mock_conv.assert_called_once_with(user_id="anonymous", q="hello")
++
++
++# ── M-4: memory keys are namespaced ──────────────────────────────────────────
++class TestMemoryKeyNamespacing:
++    def test_memory_key_is_prefixed(self):
++        assert memory_key("u1") == "chat:memory:u1"
++        # A crafted id cannot collide with operational keys.
++        assert memory_key("ingest:doc_ids") == "chat:memory:ingest:doc_ids"
++
++    @patch("graph.nodes.store_memory.get_settings")
++    @patch("graph.nodes.store_memory.get_redis")
++    def test_store_memory_writes_namespaced_key(self, mock_get_redis, mock_settings):
++        mock_redis = MagicMock()
++        mock_get_redis.return_value = mock_redis
++        mock_settings.return_value = MagicMock(redis_ttl_seconds=3600)
++        store_memory({"user_id": "u1", "messages": [HumanMessage(content="hi")], "summary": ""})
++        assert mock_redis.set.call_args[0][0] == "chat:memory:u1"
++
++    @patch("graph.nodes.load_memory.get_redis")
++    def test_load_memory_reads_namespaced_key(self, mock_get_redis):
++        mock_redis = MagicMock()
++        mock_redis.get.return_value = json.dumps({"summary": "s", "messages": []})
++        mock_get_redis.return_value = mock_redis
++        load_memory({"user_id": "u1"})
++        mock_redis.get.assert_called_once_with("chat:memory:u1")
++
++    def test_store_then_load_roundtrip_with_fakeredis(self):
++        r = fakeredis.FakeRedis(decode_responses=True)
++        with (
++            patch("graph.nodes.store_memory.get_redis", return_value=r),
++            patch("graph.nodes.load_memory.get_redis", return_value=r),
++            patch("graph.nodes.store_memory.get_settings", return_value=MagicMock(redis_ttl_seconds=3600)),
++        ):
++            store_memory(
++                {"user_id": "u9", "messages": [HumanMessage(content="hi"), AIMessage(content="yo")], "summary": "s"}
++            )
++            out = load_memory({"user_id": "u9"})
++        assert out["summary"] == "s"
++        assert [m.content for m in out["messages"]] == ["hi", "yo"]
++
++
++# ── M-3: generic 5xx bodies (no internal text leak) ──────────────────────────
++class TestNoErrorLeak:
++    @patch("controllers.chat_controller.conversation")
++    def test_chat_runtime_error_is_generic(self, mock_conv):
++        mock_conv.side_effect = RuntimeError("boom: secret/path/leaked.txt")
++        resp = _client().post("/api/chat", json={"q": "hello"})
++        assert resp.status_code == 500
++        assert "secret/path" not in resp.text
++        assert resp.json()["detail"] == "Failed to generate a response"
++
++
++# ── I-1: dead code removed ───────────────────────────────────────────────────
++def test_chroma_alias_removed():
++    import db.vector as v
++
++    assert not hasattr(v, "chroma")
+diff --git a/tests/test_main.py b/tests/test_main.py
+index ee7b412..5ab27cb 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -81,4 +81,8 @@ class TestExceptionHandlers:
+         client = TestClient(app)
+         resp = client.get("/error")
+         assert resp.status_code == 500
+-        assert "system failure" in resp.json()["detail"]
++        # The internal exception message must NOT be echoed to the client (M-3).
++        body = resp.json()
++        assert "system failure" not in str(body)
++        assert body["error"] == "Internal server error"
++        assert "detail" not in body

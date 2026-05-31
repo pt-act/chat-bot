@@ -1,0 +1,160 @@
+diff --git a/controllers/v1/ingest.py b/controllers/v1/ingest.py
+index 2bb31b7..d7539cf 100644
+--- a/controllers/v1/ingest.py
++++ b/controllers/v1/ingest.py
+@@ -2,7 +2,7 @@
+ 
+ import logging
+ 
+-from fastapi import APIRouter, Depends, HTTPException
++from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+ 
+ from db.redis_client import get_redis
+ from db.vector import delete_chunks_by_ids, get_chunks_by_doc_id, get_vectorstore
+@@ -19,28 +19,42 @@ router = APIRouter(tags=["ingest"])
+ @router.post(
+     "/ingest",
+     response_model=IngestResult,
++    response_model_exclude_none=True,
++    status_code=202,
+     dependencies=[Depends(require_api_key)],
+-    summary="Ingest a policy PDF",
++    summary="Queue a policy PDF for ingestion",
++    description=(
++        "Accepts the document and processes it in the background. Returns 202 with "
++        "`status=queued`; poll `GET /ingest/status/{doc_id}` for progress."
++    ),
++)
++def ingest(request: IngestRequest, background: BackgroundTasks, response: Response) -> IngestResult:
++    # file_name is validated to contain no dots, so it equals the doc_id used by the
++    # ingest pipeline (process_policy does file_name.removesuffix(".pdf")).
++    doc_id = request.file_name
++    redis = get_redis()
++    redis.hset(ingest_status_key(doc_id), mapping={"doc_id": doc_id, "status": "queued", "file_name": doc_id})
++    redis.sadd(ALL_DOCS_KEY, doc_id)
++
++    background.add_task(ingest_file, request.file_name, str(request.s3_url))
++    response.headers["Location"] = f"/api/v1/ingest/status/{doc_id}"
++    logger.info("Queued ingest for %s", doc_id)
++    return IngestResult(doc_id=doc_id, status="queued")
++
++
++@router.get(
++    "/ingest/status/{doc_id}",
++    response_model=IngestResult,
++    response_model_exclude_none=True,
++    summary="Get ingest status",
+ )
+-def ingest(request: IngestRequest) -> IngestResult:
+-    try:
+-        result = ingest_file(request.file_name, str(request.s3_url))
+-    except ValueError as e:
+-        logger.warning("Ingest validation failed for %s: %s", request.file_name, e)
+-        raise HTTPException(status_code=400, detail=str(e)) from e
+-    except RuntimeError as e:
+-        logger.error("Ingest runtime error for %s: %s", request.file_name, e)
+-        raise HTTPException(status_code=500, detail="Failed to ingest file") from e
+-    return IngestResult(**result)
+-
+-
+-@router.get("/ingest/status/{doc_id}", response_model=IngestResult, summary="Get ingest status")
+ def ingest_status(doc_id: str) -> IngestResult:
+     redis = get_redis()
+     status = redis.hgetall(ingest_status_key(doc_id))
+     if not status:
+         raise HTTPException(status_code=404, detail=f"No record found for '{doc_id}'")
+-    return IngestResult(doc_id=doc_id, **{k: v for k, v in status.items() if k in IngestResult.model_fields})
++    extra = {k: v for k, v in status.items() if k in IngestResult.model_fields and k != "doc_id"}
++    return IngestResult(doc_id=doc_id, **extra)
+ 
+ 
+ @router.get(
+@@ -49,11 +63,16 @@ def ingest_status(doc_id: str) -> IngestResult:
+     dependencies=[Depends(require_api_key)],
+     summary="List ingested documents",
+ )
+-def list_docs() -> DocsListResponse:
++def list_docs(
++    limit: int = Query(50, ge=1, le=200, description="Max docs to return."),
++    cursor: int = Query(0, ge=0, description="Offset cursor from a previous page's next_cursor."),
++) -> DocsListResponse:
+     redis = get_redis()
+-    doc_ids = redis.smembers(ALL_DOCS_KEY)
+-    docs = [redis.hgetall(ingest_status_key(doc_id)) for doc_id in doc_ids]
+-    return DocsListResponse(total=len(docs), docs=docs, next_cursor=None)
++    all_ids = sorted(redis.smembers(ALL_DOCS_KEY))  # stable order for deterministic paging
++    page = all_ids[cursor : cursor + limit]
++    docs = [redis.hgetall(ingest_status_key(doc_id)) for doc_id in page]
++    next_cursor = str(cursor + limit) if cursor + limit < len(all_ids) else None
++    return DocsListResponse(total=len(all_ids), docs=docs, next_cursor=next_cursor)
+ 
+ 
+ @router.delete(
+diff --git a/tests/test_async_ingest.py b/tests/test_async_ingest.py
+new file mode 100644
+index 0000000..4953526
+--- /dev/null
++++ b/tests/test_async_ingest.py
+@@ -0,0 +1,62 @@
++"""Tests for async ingest (202 + poll) and docs pagination (spec A7)."""
++
++from unittest.mock import patch
++
++import fakeredis
++from fastapi.testclient import TestClient
++
++import main as main_module
++from ingest.keys import ALL_DOCS_KEY, ingest_status_key
++
++
++def _client(redis):
++    with patch("middlewares.rate_limiter.get_redis", return_value=fakeredis.FakeRedis(decode_responses=True)):
++        return TestClient(main_module.app)
++
++
++class TestAsyncIngest:
++    def test_returns_202_queued_and_schedules_work(self):
++        redis = fakeredis.FakeRedis(decode_responses=True)
++        with (
++            patch("controllers.v1.ingest.get_redis", return_value=redis),
++            patch("controllers.v1.ingest.ingest_file") as mock_ingest,
++        ):
++            resp = _client(redis).post(
++                "/api/v1/ingest",
++                json={"file_name": "policy", "s3_url": "https://b.s3.amazonaws.com/p.pdf"},
++            )
++        assert resp.status_code == 202
++        assert resp.json() == {"doc_id": "policy", "status": "queued"}
++        assert resp.headers["Location"] == "/api/v1/ingest/status/policy"
++        # initial status persisted + scheduled background work executed (TestClient runs it)
++        assert redis.hget(ingest_status_key("policy"), "status") == "queued"
++        mock_ingest.assert_called_once_with("policy", "https://b.s3.amazonaws.com/p.pdf")
++
++    def test_status_pollable_after_queue(self):
++        redis = fakeredis.FakeRedis(decode_responses=True)
++        redis.hset(ingest_status_key("policy"), mapping={"doc_id": "policy", "status": "done", "added": "3"})
++        with patch("controllers.v1.ingest.get_redis", return_value=redis):
++            resp = _client(redis).get("/api/v1/ingest/status/policy")
++        assert resp.status_code == 200
++        assert resp.json()["status"] == "done"
++        assert resp.json()["added"] == 3
++
++
++class TestPagination:
++    def test_docs_paginate_with_cursor(self):
++        redis = fakeredis.FakeRedis(decode_responses=True)
++        for i in range(5):
++            doc_id = f"doc{i}"
++            redis.sadd(ALL_DOCS_KEY, doc_id)
++            redis.hset(ingest_status_key(doc_id), mapping={"doc_id": doc_id, "status": "done"})
++
++        with patch("controllers.v1.ingest.get_redis", return_value=redis):
++            c = _client(redis)
++            page1 = c.get("/api/v1/ingest/docs?limit=2&cursor=0").json()
++            assert page1["total"] == 5
++            assert len(page1["docs"]) == 2
++            assert page1["next_cursor"] == "2"
++
++            last = c.get("/api/v1/ingest/docs?limit=2&cursor=4").json()
++            assert len(last["docs"]) == 1
++            assert last["next_cursor"] is None

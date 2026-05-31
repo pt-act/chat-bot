@@ -1,0 +1,217 @@
+...............................................................F........ [ 50%]
+...........................................................FFF.......... [100%]
+=================================== FAILURES ===================================
+_________________ TestReadinessEndpoint.test_ready_all_deps_ok _________________
+
+self = <tests.test_api.TestReadinessEndpoint object at 0x2b946264c820>
+mock_vs = <MagicMock name='get_vectorstore' id='47916415450128'>
+
+    @patch("main.get_vectorstore")
+    def test_ready_all_deps_ok(self, mock_vs):
+        mock_vs.return_value.similarity_search.return_value = []
+        with _make_app() as client:
+            resp = client.get("/ready")
+>           assert resp.status_code == 200
+E           assert 503 == 200
+E            +  where 503 = <Response [503 Service Unavailable]>.status_code
+
+tests/test_api.py:153: AssertionError
+__________ TestRateLimitMiddleware.test_request_within_limit_succeeds __________
+
+self = <redis.connection.Connection(host=localhost,port=6379,db=0)>
+check_health = True, retry_socket_connect = False
+
+    def connect_check_health(
+        self, check_health: bool = True, retry_socket_connect: bool = True
+    ):
+        if self._sock:
+            return
+        # Track actual retry attempts for error reporting
+        actual_retry_attempts = [0]
+    
+        def failure_callback(error, failure_count):
+            actual_retry_attempts[0] = failure_count
+            self.disconnect(error=error, failure_count=failure_count)
+    
+        try:
+            if retry_socket_connect:
+                sock = self.retry.call_with_retry(
+                    self._connect,
+                    failure_callback,
+                    with_failure_count=True,
+                )
+            else:
+>               sock = self._connect()
+
+.venv/lib/python3.10/site-packages/redis/connection.py:1003: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.10/site-packages/redis/connection.py:1515: in _connect
+    raise err
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <redis.connection.Connection(host=localhost,port=6379,db=0)>
+
+    def _connect(self):
+        "Create a TCP socket connection"
+        # we want to mimic what socket.create_connection does to support
+        # ipv4/ipv6, but we want to set options prior to calling
+        # socket.connect()
+        err = None
+    
+        for res in socket.getaddrinfo(
+            self.host, self.port, self.socket_type, socket.SOCK_STREAM
+        ):
+            family, socktype, proto, canonname, socket_address = res
+            sock = None
+            try:
+                sock = socket.socket(family, socktype, proto)
+                # TCP_NODELAY
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    
+                # TCP_KEEPALIVE
+                if self.socket_keepalive:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                    for k, v in self.socket_keepalive_options.items():
+                        sock.setsockopt(socket.IPPROTO_TCP, k, v)
+    
+                # set the socket_connect_timeout before we connect
+                sock.settimeout(self.socket_connect_timeout)
+    
+                # connect
+>               sock.connect(socket_address)
+E               ConnectionRefusedError: [Errno 111] Connection refused
+
+.venv/lib/python3.10/site-packages/redis/connection.py:1499: ConnectionRefusedError
+
+During handling of the above exception, another exception occurred:
+
+self = <tests.test_rate_limiter.TestRateLimitMiddleware object at 0x2b94626bae00>
+
+    def test_request_within_limit_succeeds(self):
+        client = self._make_app(max_requests=5)
+        # Clear any residual rate limit keys from other tests
+        from db.redis_client import get_redis
+    
+        redis = get_redis()
+>       for key in redis.scan_iter(match="rate_limit:*"):
+
+tests/test_rate_limiter.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.10/site-packages/redis/commands/core.py:3378: in scan_iter
+    cursor, data = self.scan(
+.venv/lib/python3.10/site-packages/redis/commands/core.py:3353: in scan
+    return self.execute_command("SCAN", *pieces, **kwargs)
+.venv/lib/python3.10/site-packages/redis/client.py:716: in execute_command
+    return self._execute_command(*args, **options)
+.venv/lib/python3.10/site-packages/redis/client.py:722: in _execute_command
+    conn = self.connection or pool.get_connection()
+.venv/lib/python3.10/site-packages/redis/utils.py:236: in wrapper
+    return func(*args, **kwargs)
+.venv/lib/python3.10/site-packages/redis/connection.py:3041: in get_connection
+    connection.connect()
+.venv/lib/python3.10/site-packages/redis/connection.py:976: in connect
+    self.retry.call_with_retry(
+.venv/lib/python3.10/site-packages/redis/retry.py:132: in call_with_retry
+    raise error
+.venv/lib/python3.10/site-packages/redis/retry.py:120: in call_with_retry
+    return do()
+.venv/lib/python3.10/site-packages/redis/connection.py:977: in <lambda>
+    lambda: self.connect_check_health(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <redis.connection.Connection(host=localhost,port=6379,db=0)>
+check_health = True, retry_socket_connect = False
+
+    def connect_check_health(
+        self, check_health: bool = True, retry_socket_connect: bool = True
+    ):
+        if self._sock:
+            return
+        # Track actual retry attempts for error reporting
+        actual_retry_attempts = [0]
+    
+        def failure_callback(error, failure_count):
+            actual_retry_attempts[0] = failure_count
+            self.disconnect(error=error, failure_count=failure_count)
+    
+        try:
+            if retry_socket_connect:
+                sock = self.retry.call_with_retry(
+                    self._connect,
+                    failure_callback,
+                    with_failure_count=True,
+                )
+            else:
+                sock = self._connect()
+        except socket.timeout:
+            e = TimeoutError("Timeout connecting to server")
+            record_error_count(
+                server_address=self.host,
+                server_port=self.port,
+                network_peer_address=self.host,
+                network_peer_port=self.port,
+                error_type=e,
+                retry_attempts=actual_retry_attempts[0],
+            )
+            raise e
+        except OSError as e:
+            e = ConnectionError(self._error_message(e))
+            record_error_count(
+                server_address=getattr(self, "host", None),
+                server_port=getattr(self, "port", None),
+                network_peer_address=getattr(self, "host", None),
+                network_peer_port=getattr(self, "port", None),
+                error_type=e,
+                retry_attempts=actual_retry_attempts[0],
+            )
+>           raise e
+E           redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.
+
+.venv/lib/python3.10/site-packages/redis/connection.py:1025: ConnectionError
+________ TestRateLimitMiddleware.test_request_exceeds_limit_returns_429 ________
+
+self = <tests.test_rate_limiter.TestRateLimitMiddleware object at 0x2b94626bb0d0>
+
+    def test_request_exceeds_limit_returns_429(self):
+        client = self._make_app(max_requests=1)
+        client.get("/test")  # first request
+        resp = client.get("/test")  # second request → should be blocked
+>       assert resp.status_code == 429
+E       assert 200 == 429
+E        +  where 200 = <Response [200 OK]>.status_code
+
+tests/test_rate_limiter.py:84: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  middlewares.rate_limiter:rate_limiter.py:109 Rate limiting unavailable (Redis error), allowing request from testclient
+WARNING  middlewares.rate_limiter:rate_limiter.py:109 Rate limiting unavailable (Redis error), allowing request from testclient
+_______ TestRateLimitMiddleware.test_different_ips_have_separate_limits ________
+
+self = <tests.test_rate_limiter.TestRateLimitMiddleware object at 0x2b94626bb3a0>
+
+    def test_different_ips_have_separate_limits(self):
+        client = self._make_app(max_requests=1)
+        client.get("/test")  # from default IP
+        # Simulate a different IP via header
+        resp = client.get("/test", headers={"x-forwarded-for": "9.9.9.9"})
+        # Should be blocked because we haven't configured trusted proxies
+        # and direct IP is used
+>       assert resp.status_code == 429
+E       assert 200 == 429
+E        +  where 200 = <Response [200 OK]>.status_code
+
+tests/test_rate_limiter.py:94: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  middlewares.rate_limiter:rate_limiter.py:109 Rate limiting unavailable (Redis error), allowing request from testclient
+WARNING  middlewares.rate_limiter:rate_limiter.py:109 Rate limiting unavailable (Redis error), allowing request from testclient
+=============================== warnings summary ===============================
+.venv/lib/python3.10/site-packages/fastapi/testclient.py:1
+  /tmp/poncho/sessions/0b37e70a-9546-45e1-96ec-5659adc517fd/repo/.venv/lib/python3.10/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_api.py::TestReadinessEndpoint::test_ready_all_deps_ok - ass...
+FAILED tests/test_rate_limiter.py::TestRateLimitMiddleware::test_request_within_limit_succeeds
+FAILED tests/test_rate_limiter.py::TestRateLimitMiddleware::test_request_exceeds_limit_returns_429
+FAILED tests/test_rate_limiter.py::TestRateLimitMiddleware::test_different_ips_have_separate_limits
+4 failed, 140 passed, 1 warning in 41.64s
