@@ -1,14 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Composer } from "./components/Composer";
 import { Controls } from "./components/Controls";
 import { HealthBadge } from "./components/HealthBadge";
 import { MessageList } from "./components/MessageList";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { UploadButton } from "./components/UploadButton";
-import { streamChat } from "./lib/api";
-import type { ChatMessage, Lang, Mode, Source } from "./types";
+import { useChatStream } from "./lib/useChatStream";
+import type { Lang, Mode } from "./types";
 
-// Stable per-browser id so conversation memory persists across reloads.
 function userId(): string {
   const k = "chatbot:user-id";
   let id = localStorage.getItem(k);
@@ -20,79 +19,25 @@ function userId(): string {
 }
 
 export function App() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [mode, setMode] = useState<Mode>("strict");
   const [lang, setLang] = useState<Lang>("auto");
-  const [busy, setBusy] = useState(false);
   const [review, setReview] = useState(() => window.location.hash === "#/review");
-  const abortRef = useRef<AbortController | null>(null);
+  const [editText, setEditText] = useState<string | null>(null);
+  const { messages, busy, send, stop } = useChatStream(userId());
 
-  // Keep the Review view in sync with the URL hash (#/review).
   useEffect(() => {
     const onHash = () => setReview(window.location.hash === "#/review");
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const toggleReview = useCallback(() => {
+  const toggleReview = () => {
     window.location.hash = review ? "" : "#/review";
-  }, [review]);
+  };
 
-  const patchLast = useCallback((fn: (m: ChatMessage) => ChatMessage) => {
-    setMessages((prev) => {
-      const next = prev.slice();
-      next[next.length - 1] = fn(next[next.length - 1]);
-      return next;
-    });
-  }, []);
+  const sendWithOverrides = (text: string) => send(text, { mode, lang });
 
-  const send = useCallback(
-    (text: string) => {
-      const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text };
-      const assistant: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        streaming: true,
-        sources: [],
-      };
-      setMessages((prev) => [...prev, userMsg, assistant]);
-      setBusy(true);
-
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
-
-      streamChat(
-        { q: text, mode, lang },
-        userId(),
-        {
-          onToken: (delta) => patchLast((m) => ({ ...m, content: m.content + delta })),
-          onSources: (sources: Source[]) => patchLast((m) => ({ ...m, sources })),
-          onDone: (meta) => {
-            patchLast((m) => ({ ...m, streaming: false, meta: meta as unknown as ChatMessage["meta"] }));
-            setBusy(false);
-          },
-          onError: (message) => {
-            patchLast((m) => ({
-              ...m,
-              streaming: false,
-              error: true,
-              content: m.content || message,
-            }));
-            setBusy(false);
-          },
-        },
-        ctrl.signal,
-      );
-    },
-    [mode, lang, patchLast],
-  );
-
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
-    patchLast((m) => ({ ...m, streaming: false }));
-    setBusy(false);
-  }, [patchLast]);
+  const handleEdit = (text: string) => setEditText(text);
 
   return (
     <div className="app">
@@ -124,10 +69,16 @@ export function App() {
       ) : (
         <>
           <main className="main">
-            <MessageList messages={messages} />
+            <MessageList messages={messages} onResend={send} onEdit={handleEdit} />
           </main>
           <footer className="footer">
-            <Composer busy={busy} onSend={send} onStop={stop} />
+            <Composer
+              busy={busy}
+              onSend={sendWithOverrides}
+              onStop={stop}
+              editText={editText}
+              onEditConsumed={() => setEditText(null)}
+            />
           </footer>
         </>
       )}

@@ -1,0 +1,44 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 860px;
+  margin-inline: auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space);
+  border-block-end: 1px solid var(--surface-2);
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space);
+}
+
+.main {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space);
+  position: relative;
+}
+
+.main-inner {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.footer {
+  padding: var(--space);
+  border-block-start: 1px solid var(--surface-2);
+}

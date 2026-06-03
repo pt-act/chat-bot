@@ -9,10 +9,14 @@ export interface Source {
   snippet?: string | null;
 }
 
+export type Groundedness = "supported" | "partial" | "unsupported";
+
 export interface ChatMeta {
   mode: string;
   lang?: string | null;
   self_ingested?: boolean;
+  grounded?: Groundedness | null;
+  grounded_score?: number | null;
   correlation_id?: string | null;
   model?: string | null;
 }

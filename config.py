@@ -25,8 +25,9 @@ class Settings(BaseSettings):
     llm_base_url: str = ""  # Override for OpenAI-compatible endpoints (Ollama, OpenRouter, etc.)
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    google_api_key: str = ""  # New: for Google Gemini
+    google_api_key: str = ""
     groq_api_key: str = ""
+    cerebras_api_key: str = ""
 
     # Embeddings
     embedding_provider: str = "openai"
@@ -125,6 +126,8 @@ class Settings(BaseSettings):
             raise ValueError("GOOGLE_API_KEY is required when LLM_PROVIDER=google")
         if provider == "groq" and not self.groq_api_key:
             raise ValueError("GROQ_API_KEY is required when LLM_PROVIDER=groq")
+        if provider == "cerebras" and not self.cerebras_api_key:
+            raise ValueError("CEREBRAS_API_KEY is required when LLM_PROVIDER=cerebras")
         return self
 
     @model_validator(mode="after")

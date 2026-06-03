@@ -11,9 +11,9 @@ PROVIDER_ALIASES = {
     "gemini": "google",
     "mistral": "mistral",
     "deepseek": "deepseek",
+    "cerebras": "cerebras",
 }
 
-# Providers that use OpenAI-compatible API format
 OPENAI_COMPATIBLE = {
     "openai",
     "ollama",
@@ -26,6 +26,7 @@ OPENAI_COMPATIBLE = {
     "vllm",
     "lmstudio",
     "llamacpp",
+    "cerebras",
 }
 
 
@@ -46,14 +47,24 @@ def get_llm(temperature: float = 0, max_tokens: int = 1000):
             "max_tokens": max_tokens,
         }
 
-        # If base_url is set, use it (Ollama, OpenRouter, Together, etc.)
+        provider_keys = {
+            "cerebras": getattr(setting, "cerebras_api_key", ""),
+            "groq": getattr(setting, "groq_api_key", ""),
+            "openrouter": setting.openai_api_key,
+            "together": setting.openai_api_key,
+            "deepseek": setting.openai_api_key,
+            "fireworks": setting.openai_api_key,
+            "mistral": setting.openai_api_key,
+        }
+
         if base_url:
             kwargs["base_url"] = base_url
-            # Some providers need the API key, some don't (local Ollama)
-            if setting.openai_api_key:
-                kwargs["api_key"] = setting.openai_api_key
-            else:
-                kwargs["api_key"] = "no-key-needed"  # Local providers
+            key = provider_keys.get(provider, setting.openai_api_key)
+            kwargs["api_key"] = key or "no-key-needed"
+        elif provider != "openai":
+            key = provider_keys.get(provider)
+            if key:
+                kwargs["api_key"] = key
 
         return ChatOpenAI(**kwargs)
 
@@ -85,7 +96,7 @@ def get_llm(temperature: float = 0, max_tokens: int = 1000):
     else:
         raise ValueError(
             f"Unsupported LLM_PROVIDER: {provider}. "
-            f"Supported: openai, anthropic, google, groq, ollama, "
+            f"Supported: openai, anthropic, google, groq, cerebras, ollama, "
             f"openrouter, together, deepseek, fireworks, mistral, "
             f"vllm, lmstudio, llamacpp"
         )

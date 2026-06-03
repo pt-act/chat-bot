@@ -1,0 +1,30 @@
+.refusal {
+  background: var(--refusal-bg);
+  border: 1px solid var(--refusal-border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-block-start: 8px;
+}
+
+.refusal-heading {
+  font-weight: 600;
+  margin-block: 0 4px;
+  color: var(--refusal-border);
+}
+
+.refusal-body {
+  margin-block: 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.refusal-cta {
+  background: var(--refusal-cta-bg);
+  color: #fff;
+  font-size: 13px;
+  padding: 6px 14px;
+}
+
+.refusal-cta:hover {
+  background: var(--refusal-cta-hover);
+}

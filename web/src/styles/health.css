@@ -1,0 +1,22 @@
+.health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.health-ok .health-dot {
+  background: #3ecf8e;
+}
+
+.health-warn .health-dot {
+  background: var(--danger);
+}

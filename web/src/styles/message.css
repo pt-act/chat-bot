@@ -1,0 +1,82 @@
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.empty-title {
+  font-size: 17px;
+  color: var(--text);
+  margin-block-end: 4px;
+}
+
+.bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.bubble-user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+}
+
+.bubble-assistant {
+  align-self: flex-start;
+  background: var(--surface);
+}
+
+.bubble-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-block-end: 6px;
+}
+
+.bubble-error {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.badge-learn {
+  display: inline-block;
+  margin-block-start: 8px;
+  font-size: 11px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0 6px;
+}
+
+.new-msg-affordance {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface-2);
+  color: var(--accent);
+  border: 1px solid var(--chip-border);
+  border-radius: 20px;
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.new-msg-affordance:hover {
+  background: var(--surface);
+}

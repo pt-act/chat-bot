@@ -1,0 +1,21 @@
+.chip {
+  display: inline-block;
+  font-size: 11px;
+  border-radius: 6px;
+  padding: 1px 8px;
+  margin-inline-end: 4px;
+  margin-block-start: 6px;
+}
+
+.chip-mode {
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-border);
+  color: var(--muted);
+}
+
+.chip-provenance {
+  background: transparent;
+  border: 1px solid var(--chip-synthesized);
+  color: var(--chip-synthesized);
+  font-style: italic;
+}
