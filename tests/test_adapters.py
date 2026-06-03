@@ -56,6 +56,7 @@ class TestLLMAdapter:
             llm_model="llama-3.1-8b",
             llm_base_url="",
             openai_api_key="",
+            groq_api_key="",
         )
         with patch("langchain_openai.ChatOpenAI") as mock_cls:
             mock_cls.return_value = MagicMock()
@@ -475,6 +476,7 @@ class TestLLMAdapterEdgeCases:
             "vllm",
             "lmstudio",
             "llamacpp",
+            "cerebras",
         }
         assert OPENAI_COMPATIBLE == expected
 
