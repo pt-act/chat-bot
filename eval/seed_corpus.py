@@ -20,11 +20,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# Seeding only needs Redis + ChromaDB, not an LLM. Default to providers that
-# work without API keys so the script succeeds in CI where no secrets are set.
-os.environ.setdefault("LLM_PROVIDER", "ollama")
-os.environ.setdefault("EMBEDDING_PROVIDER", "fastembed")
-os.environ.setdefault("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+# Seeding only needs Redis + ChromaDB, not an LLM. Force providers that work
+# without API keys so the script succeeds in CI where no secrets are set.
+# Use direct assignment (not setdefault) to override any job-level env vars
+# that would require API keys (e.g. LLM_PROVIDER=cerebras).
+os.environ["LLM_PROVIDER"] = "ollama"
+os.environ["EMBEDDING_PROVIDER"] = "fastembed"
+os.environ["EMBEDDING_MODEL"] = "BAAI/bge-small-en-v1.5"
 
 _DEFAULT_POLICY = """\
 Return Policy

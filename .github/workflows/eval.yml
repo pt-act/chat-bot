@@ -57,10 +57,6 @@ jobs:
 
       - name: Seed evaluation corpus
         run: python eval/seed_corpus.py
-        env:
-          LLM_PROVIDER: ollama
-          EMBEDDING_PROVIDER: fastembed
-          EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
 
       - name: Run RAGAS evaluation
         run: |
