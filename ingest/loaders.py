@@ -13,6 +13,8 @@ import logging
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 
+from ingest.pdf_preflight import preflight_check
+
 logger = logging.getLogger(__name__)
 
 # Extensions handled by the plain-text reader (no third-party parser needed).
@@ -60,14 +62,38 @@ def _load_html(file_path: str) -> list[Document]:
     return [Document(page_content=soup.get_text(" ", strip=True), metadata={"page": 0})]
 
 
-def load_documents(file_path: str, ext: str) -> list[Document]:
+def _load_pdf(file_path: str, parser: str | None = None) -> list[Document]:
+    """Load a PDF with optional parser selection.
+
+    ``parser`` overrides:
+    - ``"pypdf"`` → force PyPDFLoader
+    - ``"opendataloader"`` → OpenDataLoader (stub — implemented in Group 2)
+    - ``None`` → auto-detect via preflight (ODL when Java present, else PyPDF)
+    """
+    if parser == "pypdf":
+        return PyPDFLoader(file_path).load()
+    if parser == "opendataloader":
+        # Group 2 will implement the real adapter here.
+        raise NotImplementedError("OpenDataLoader adapter not yet implemented (Group 2)")
+    # Auto-detect when parser is None
+    if parser is None:
+        ok, _ = preflight_check()
+        if ok:
+            raise NotImplementedError("OpenDataLoader adapter not yet implemented (Group 2)")
+        logger.info("ODL preflight failed; falling back to PyPDFLoader for %s", file_path)
+        return PyPDFLoader(file_path).load()
+    raise ValueError(f"Unsupported PDF parser: {parser!r}")
+
+
+def load_documents(file_path: str, ext: str, parser: str | None = None) -> list[Document]:
     """Load a local file into Documents based on its extension.
 
     Raises ``ValueError`` for an unsupported extension.
+    The ``parser`` kwarg is only used for PDF files; non-PDF formats ignore it.
     """
     ext = ext.lower()
     if ext == ".pdf":
-        return PyPDFLoader(file_path).load()
+        return _load_pdf(file_path, parser=parser)
     if ext in TEXT_EXTENSIONS:
         return _load_text(file_path)
     if ext == ".docx":

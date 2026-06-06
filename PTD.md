@@ -92,7 +92,7 @@ badge with `/ready` probe, `sessionStorage` persistence, deferred screen-reader 
 - **Language detection:** in-house heuristic + [lingua](https://github.com/pemistahl/lingua-py)
   (`lingua-language-detector`) EN/PT fallback — via `utils/lang_detect`.
 - **Vector store:** ChromaDB (embedded/persistent) via `langchain-chroma`.
-- **Document parsing:** pypdf (PDF), docx2txt (DOCX), beautifulsoup4 (HTML), stdlib (TXT/MD) — via `ingest/loaders.py`.
+- **Document parsing:** pypdf (PDF, fallback), docx2txt (DOCX), beautifulsoup4 (HTML), stdlib (TXT/MD) — via `ingest/loaders.py`. **OpenDataLoader** (ODL) PDF integration: optional Java-based parser with Markdown output, JSON tree walk, hierarchical chunking (L1/L2), hybrid OCR/formula/picture enrichment — via `ingest/pdf_opendataloader.py` (Group 2+), `ingest/pdf_preflight.py` (Group 1).
 - **Cache/state:** Redis (conversation memory, rate-limit counters, ingest metadata).
 - **Config:** pydantic-settings (`config.py`).
 - **Web client:** Vite + React + TypeScript (`web/`).
@@ -115,6 +115,7 @@ badge with `/ready` probe, `sessionStorage` persistence, deferred screen-reader 
 | Resilience | `utils/resilience.py` | `resilient_invoke`/`@resilient_call`: tenacity retry on transient errors + in-process circuit breaker (#14). |
 | Feedback | `services/feedback_service.py`, `feedback/keys.py`, `controllers/v1/feedback.py`, `schemas/feedback.py` | Persist 👍/👎 (+reason), list (API-key gated), export downvotes to the golden set (#3). |
 | Ingest | `ingest/policies.py`, `ingest/loaders.py`, `ingest/keys.py` | URL download **or** local upload → shared `_run_ingest` (load→chunk→embed→upsert); multi-format loader registry (PDF/TXT/MD/DOCX/HTML); Redis key constants. |
+| ODL PDF parser | `ingest/pdf_preflight.py`, `ingest/pdf_opendataloader.py` (Group 2+) | Preflight checks (Java 11+, package importable, hybrid reachability); ODL `convert()` adapter + JSON tree walker + hierarchical chunk builder (L1/L2). Fallback to PyPDF on failure. |
 | Durable ingest | `ingest/queue.py`, `ingest/worker.py` | `INGEST_MODE=queue`: Redis-list job queue + worker, retries + per-`doc_id` idempotency lock (#4). |
 | Hybrid retrieval | `ingest/retrieval.py` | Dense + BM25 fused via RRF + rerank hook; gated by `RETRIEVAL_STRATEGY` (Phase 4). |
 | DB | `db/redis_client.py`, `db/vector.py` | Redis client + `memory_key`; Chroma accessors + `VectorStoreRepository`. |

@@ -13,6 +13,9 @@ CHAT_MODES = ("strict", "open", "learning", "learning_review")
 # Modes that synthesize gap-filling answers and may grow the knowledge base.
 LEARNING_MODES = ("learning", "learning_review")
 
+# Supported PDF parser overrides.
+PDF_PARSER_OPTIONS = ("pypdf", "opendataloader")
+
 
 class Settings(BaseSettings):
     # Pydantic automatically matches ex:- OPENAI_API_KEY become openai_api_key
@@ -115,6 +118,32 @@ class Settings(BaseSettings):
     trusted_proxies: list[str] = []
     allowed_hosts: list[str] = ["*"]
 
+    # --- OpenDataLoader PDF parser integration (spec: specs/opendataloader/) ---
+    # ODL output format(s) — e.g. "json,markdown", "markdown", "json,markdown,tagged-pdf"
+    odl_format: str = "json,markdown"
+    # Reading-order algorithm passed to ODL
+    odl_reading_order: str = "xycut"
+    # Use native PDF structure tags when present
+    odl_use_struct_tree: bool = False
+    # Include header/footer elements in output
+    odl_include_header_footer: bool = False
+    # Hybrid mode backend (e.g. "docling-fast") — None disables hybrid
+    odl_hybrid: str | None = None
+    # Hybrid routing mode: "auto" (triage) or "full" (all pages to AI backend)
+    odl_hybrid_mode: str = "auto"  # auto | full
+    # URL of the hybrid sidecar server (default set in docker-compose)
+    odl_hybrid_url: str | None = None
+    # Fallback to local Java-only ODL when hybrid server is unreachable
+    odl_hybrid_fallback: bool = False
+    # Enable LaTeX formula extraction (requires hybrid_mode=full)
+    odl_enrich_formula: bool = False
+    # Enable picture/chart description (requires hybrid_mode=full)
+    odl_enrich_pictures: bool = False
+    # Global PDF parser fallback: if ODL fails, fall back to PyPDFLoader
+    pdf_parser_fallback: bool = True
+    # Explicit PDF parser override: "pypdf" | "opendataloader" | None (auto-detect)
+    pdf_parser: str | None = None
+
     @model_validator(mode="after")
     def check_api_keys(self):
         provider = self.llm_provider.lower()
@@ -161,6 +190,32 @@ class Settings(BaseSettings):
         """Warn when permissive CORS is configured."""
         if "*" in self.cors_origins:
             logger.warning("CORS_ORIGINS contains '*'. This allows any origin to access the API.")
+        return self
+
+    @model_validator(mode="after")
+    def check_pdf_parser(self):
+        """Validate PDF_PARSER override value."""
+        parser = self.pdf_parser
+        if parser is not None and parser.lower() not in {"pypdf", "opendataloader"}:
+            raise ValueError(f"PDF_PARSER must be 'pypdf' or 'opendataloader' — got '{parser}'")
+        return self
+
+    @model_validator(mode="after")
+    def check_odl_hybrid_mode(self):
+        """Validate ODL_HYBRID_MODE."""
+        mode = self.odl_hybrid_mode.lower()
+        if mode not in {"auto", "full"}:
+            raise ValueError(f"ODL_HYBRID_MODE must be 'auto' or 'full' — got '{self.odl_hybrid_mode}'")
+        return self
+
+    @model_validator(mode="after")
+    def check_odl_enrichment(self):
+        """Enrichment flags require hybrid_mode=full."""
+        if self.odl_hybrid_mode.lower() != "full":
+            if self.odl_enrich_formula:
+                raise ValueError("ODL_ENRICH_FORMULA=true requires ODL_HYBRID_MODE=full")
+            if self.odl_enrich_pictures:
+                raise ValueError("ODL_ENRICH_PICTURES=true requires ODL_HYBRID_MODE=full")
         return self
 
 
