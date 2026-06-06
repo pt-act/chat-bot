@@ -579,6 +579,99 @@ Initial release from upstream `hasandeveloper/chat-bot`.
 
 ---
 
+## [Web UX v2.0] — 2026-06-06
+
+Major frontend upgrade for the reference SPA (`web/`). Transforms the client from a functional
+MVP into a trust-first, calm-streaming RAG assistant with zero backend changes.
+
+### Added — Trust & Verifiability
+
+- **ConfidenceBadge** component — maps `meta.grounded_score` or best source score to High
+  (≥0.7, green), Medium (0.4–0.7, amber), Low (<0.4, red). Tooltip shows raw score.
+- **CitationCards** — replaces plain source list; each card shows label, page, a visual score
+  meter (0–1 bar), expandable snippet, and a **Copy** button.
+- **RefusalCard** — when `mode=strict` and sources are empty with refusal text, renders a
+  distinct "Not in the knowledge base" card with a **"Answer from general knowledge"** CTA
+  that re-sends the same question in `open` mode.
+- **ModeChip** / **ProvenanceChip** — shows `meta.mode` on every assistant message; warns
+  "AI-synthesized — not from official docs" when `meta.self_ingested=true`.
+- **Per-message `lang`/`dir`** — `lang="ar"` + `dir="rtl"` on Arabic messages for correct
+  screen-reader pronunciation and mirrored layout.
+
+### Added — Streaming UX
+
+- **MarkdownBody** — renders via `react-markdown` + `remark-gfm`. Buffers incomplete fenced
+  code blocks during streaming (no ``` closer yet) so no half-rendered tables or code flicker.
+- **CodeBlock** + **ShikiHighlighter** — lazy-loaded syntax highlighting (one chunk per
+  language via Vite code-splitting) with a **Copy** button per block. Falls back to plain
+  `<pre>` while loading.
+- **Smart autoscroll** — auto-scrolls only when user is pinned to bottom (within 60 px
+  threshold). If scrolled up to read history, a floating **"↓ New messages"** button appears;
+  clicking jumps to bottom and resumes pinning. No scroll hijacking.
+- **Regenerate** / **Edit-resend** — Regenerate button on the last assistant message re-sends
+  the preceding user question. Edit (pencil) icon on user messages populates the composer for
+  editing and resending as a new turn.
+- **StreamingIndicator** — animated typing dots before the first token; inline error state
+  (not blank bubble) on SSE `error` frame.
+
+### Added — Input, Errors, A11y, Perf
+
+- **SuggestedChips** — 3–4 mode/lang-aware prompt chips on empty state and after each turn.
+  Includes "Answer from general knowledge" (switches `mode=open`), "Explain in Arabic"
+  (sends `lang=ar`), "Summarize this", and a policy question example.
+- **Character counter** — live counter; disables send at 2000 chars (matches server
+  validation). Color changes near limit.
+- **Persisted controls** — `mode` and `lang` stored in `sessionStorage`, restored on reload.
+- **Friendly problem+json** — maps `{title, detail, status}` to human-friendly inline messages
+  (e.g., "Too many messages. Please wait a moment" for 429). `correlation_id` shown behind a
+  **"Report issue"** button that copies to clipboard.
+- **Rate-limit countdown** — on 429, reads `Retry-After` header, shows live countdown bar
+  above composer, disables send during cooldown.
+- **Enhanced health badge** — polls `/health`; shows "degraded" state (amber dot). On-demand
+  `/ready` probe on click; shows which dependency is down (Redis/ChromaDB) in tooltip.
+- **Deferred SR announcements** — dedicated off-screen `aria-live="polite"` region announces
+  each completed assistant message **once** (first 150 chars) instead of per-token chatter.
+- **`prefers-reduced-motion`** — disables typing indicator animation and token fade under the
+  media query; shows static dots instead.
+- **Keyboard refinements** — `Esc` stops streaming; arrow keys navigate through citation card
+  action buttons; visible focus rings maintained.
+
+### Added — Conversation Management
+
+- **New conversation** — **+ New** button in header rotates `X-User-Id` to a fresh value and
+  clears the message history. Old conversation remains on backend for its TTL.
+- **Export transcript** — **↓ Export** dropdown downloads conversation as **JSON** (structured,
+  with metadata) or **Text** (human-readable with role labels). Uses `Blob` +
+  `URL.createObjectURL`.
+- **TTL note** — footer shows "Conversations kept ~24 hours" so users know memory is temporary.
+
+### Added — Inline Feedback
+
+- **👍/👎 feedback buttons** on every completed assistant message. Clicking sends `POST
+  /api/v1/feedback` with question, answer, `correlation_id`, and rating. Downvote reveals an
+  optional text input for reason (max 200 chars). Buttons disable after submission.
+
+### Changed — Architecture
+
+- **CSS split** — `styles.css` (783 lines) split into 18 per-component files under
+  `src/styles/` (`tokens.css`, `layout.css`, `controls.css`, `message.css`, `confidence.css`,
+  `citations.css`, `refusal.css`, `chips.css`, `markdown.css`, `code-block.css`,
+  `action-row.css`, `streaming.css`, `composer.css`, `upload.css`, `health.css`, `review.css`,
+  `a11y.css`, `conversation.css`, `feedback.css`). Main `styles.css` is now just `@import`s.
+- **useChatStream hook** — extracted streaming logic from `App.tsx` into `lib/useChatStream.ts`
+  with `send`, `stop`, `reset`, and `patchLast` interface.
+- **Types** — extended `ChatMeta` with `grounded` and `grounded_score` fields; added
+  `ChatErrorMeta` for structured error metadata.
+
+### Fixed
+
+- SSE streaming bug — ReadableStream implementation now properly buffers partial SSE frames
+  (frames split across `read()` calls) until `\n\n` boundary before dispatching. Verified with
+  curl and Playwright: tokens render incrementally.
+- Double-error rendering in `MessageList` — eliminated duplicate error display.
+
+---
+
 ## Comparison: v1.0.0 → v2.0.0
 
 | Dimension | v1.0.0 | v2.0.0 |

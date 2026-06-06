@@ -3,7 +3,7 @@
 Technical reference for engineers and operators. For consumer usage see
 [`user_guidelines.md`](user_guidelines.md); for setup see [`README.md`](README.md).
 
-**Version:** API 2.4.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-05-31
+**Version:** API 2.4.0 / Web UX 2.0 · **Runtime:** Python 3.10+ · **Last updated:** 2026-06-06
 
 ---
 
@@ -41,6 +41,16 @@ queue / golden set (#3), **provider resilience** (retry/backoff + circuit breake
 a hermetic **retrieval-regression test** + opt-in eval CI (#19), and a **reviewer UI** (#29).
 Every change is behind a `config.Settings` flag whose default preserves prior behavior; the
 pipeline is now **8 nodes** and the API contract is backward compatible.
+
+**Web UX v2.0** (2026-06-06) is a major frontend upgrade that transforms the reference SPA
+from a functional MVP into a trust-first, calm-streaming RAG assistant. It extracts the
+streaming logic into a reusable `useChatStream` hook, adds trust signals (confidence badges,
+citation cards with score meters, mode/provenance chips, strict-mode refusal CTA), upgrades
+markdown rendering with fenced-code buffering and lazy Shiki highlighting, implements smart
+autoscroll with a "New messages" affordance, adds suggested prompt chips, inline 👍/👎 feedback,
+conversation export (JSON/Text), new-chat rotation, rate-limit countdown, enhanced health
+badge with `/ready` probe, `sessionStorage` persistence, deferred screen-reader announcements,
+`prefers-reduced-motion`, and keyboard navigation. CSS is split into 18 per-component files.
 
 ---
 
@@ -350,8 +360,7 @@ report, and applies metric floors — keeping the PR pipeline hermetic and cost-
   `INGEST_MODE=queue` and a shared `ingest_incoming` volume), `.local`/`.test` variants.
 - **Process:** `uvicorn main:app --host 0.0.0.0 --port 8000 --workers N`; durable ingestion
   adds a `python -m ingest.worker` process (one or more) consuming the Redis queue.
-- **Web client:** build `web/` and serve `dist/` statically; configure `CORS_ORIGINS` or
-  reverse-proxy `/api`.
+- **Web client:** build `web/` (`tsc -b && vite build`) and serve `dist/` statically; configure `CORS_ORIGINS` or reverse-proxy `/api`. The SPA includes trust signals (confidence badges, citation cards with score meters, mode/provenance chips), strict-mode refusal CTA, suggested prompt chips, inline 👍/👎 feedback, conversation export (JSON/Text), new-chat rotation, rate-limit countdown, health badge with `/ready` probe, `sessionStorage` persistence for controls, RTL/Arabic support, deferred screen-reader announcements, `prefers-reduced-motion`, and keyboard navigation.
 - **SSE behind proxies:** endpoint sets `Cache-Control: no-cache` and
   `X-Accel-Buffering: no`; ensure the proxy does not buffer event streams.
 - **Scaling:** memory/rate-limit state is in Redis (shared across workers). Health at

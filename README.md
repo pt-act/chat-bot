@@ -616,15 +616,27 @@ Returns `200` with `{"status": "ready"}` only if both Redis and ChromaDB respond
 ## 🖥️ Web Client
 
 A reference single-page client lives in [`web/`](web/) (Vite + React + TypeScript). It
-demonstrates the v1 API end-to-end: **streaming chat** (SSE), per-request **mode**/
-**language** selectors, **structured citations**, **RTL/Arabic** rendering, accessibility
-(`aria-live`, keyboard send, focus rings), and a backend health badge.
+demonstrates the v1 API end-to-end with **production-grade UX**:
+
+- **Streaming chat** (SSE) with typing indicator, smart autoscroll (pin-to-bottom), and a **"New messages"** affordance when scrolled up
+- **Markdown rendering** with `react-markdown` + `remark-gfm` — tables, strikethrough, autolinks; fenced code blocks are buffered until the closing fence arrives so no half-rendered blobs flicker
+- **Shiki syntax highlighting** (lazy-loaded, one chunk per language) with **Copy** button per code block
+- **Trust signals** — confidence badge (High/Medium/Low from `meta.grounded_score`), mode chip, provenance chip ("AI-synthesized" warning), and structured citation cards with score meter, expandable snippet, and copy button
+- **Strict-mode refusal UX** — "Not in the knowledge base" card with a one-click **"Answer from general knowledge"** CTA that re-sends in `open` mode
+- **Suggested prompt chips** — 3–4 mode/language-aware suggestions on empty state and after each turn (e.g., "Explain in Arabic", "Answer from general knowledge")
+- **Inline feedback** — 👍/👎 buttons on every assistant message, with optional reason input on downvote; submits `POST /api/v1/feedback` automatically with `correlation_id`
+- **Conversation management** — **+ New** button rotates `X-User-Id` for a fresh chat; **Export** dropdown downloads transcript as JSON or Text; TTL note (~24h) in footer
+- **Error handling** — friendly problem+json messages, rate-limit countdown from `Retry-After`, correlation ID copy button for support
+- **Health badge** — polls `/health`, shows degraded state (amber), on-demand `/ready` probe with dependency details (Redis/ChromaDB)
+- **Accessibility** — RTL/Arabic (`dir="rtl"`, `lang="ar"`), deferred screen-reader announcements (once per completed message, not per token), visible focus rings, `prefers-reduced-motion` support
+- **Keyboard** — Enter to send, Shift+Enter for newline, Escape to stop streaming, arrow keys navigate citation cards
+- **Controls** — per-request mode/language selectors with `sessionStorage` persistence; character counter (2000 char limit)
 
 ```bash
 cd web
 bun install      # or npm install
 bun run dev      # http://localhost:5173 (proxies /api and /health to :8000)
-bun run build    # production bundle → web/dist/
+bun run build    # tsc -b && vite build → web/dist/
 ```
 
 See [`web/README.md`](web/README.md) for details.
@@ -892,7 +904,7 @@ Full audit reports: `audit_artifacts/AUDIT_REPORT.md` and `audit_artifacts/FINAL
 * ✅ Versioned, typed API (`/api/v1`) — Pydantic response envelopes with RFC 9457 `application/problem+json` errors; unversioned `/api/*` still works but is deprecated
 * ✅ SSE streaming — `POST /api/v1/chat/stream` emits `token` → `sources` → `done` (and `error`) Server-Sent Events
 * ✅ Per-request controls — `mode`, `lang`, `top_k`, `score_threshold` override server defaults per call
-* ✅ Reference web client (`web/`) — Vite + React + TypeScript SPA: streaming chat, mode/language selectors, structured citations, RTL/Arabic rendering, health badge, and a `learning_review` reviewer panel
+* ✅ Reference web client (`web/`) — Vite + React + TypeScript SPA with production UX: streaming chat with smart autoscroll, markdown + Shiki highlighting, trust signals (confidence badge, mode/provenance chips, citation cards with score meter), strict-mode refusal CTA, suggested prompt chips, inline 👍/👎 feedback, conversation export (JSON/Text), new-chat rotation, rate-limit countdown, health badge with `/ready` probe, `sessionStorage` persistence, RTL/Arabic, deferred SR announcements, `prefers-reduced-motion`, keyboard navigation, and a `learning_review` reviewer panel
 * ✅ 14 LLM providers with universal OpenAI-compatible adapter + provider aliases
 * ✅ 7+ embedding models via FastEmbed (ONNX, ~50MB, zero CVEs) + model registry
 * ✅ API key authentication (FastAPI dependency injection) on destructive ingest endpoints
