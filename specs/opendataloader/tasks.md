@@ -61,7 +61,7 @@ Group 11 (Obs + Docs)      ← depends on 2, 7, 10
 **Estimate**: 2 iterations
 
 ### Implementation Tasks
-- [ ] 1.1 Add `ODL_*` config env vars to `config.py:Settings` with Pydantic validators
+- [x] 1.1 Add `ODL_*` config env vars to `config.py:Settings` with Pydantic validators
   - `ODL_FORMAT=json,markdown` → `str`
   - `ODL_READING_ORDER=xycut` → `str`
   - `ODL_USE_STRUCT_TREE=false` → `bool`
@@ -74,32 +74,32 @@ Group 11 (Obs + Docs)      ← depends on 2, 7, 10
   - `ODL_ENRICH_PICTURES=false` → `bool`
   - `PDF_PARSER_FALLBACK=true` → `bool`
   - `PDF_PARSER=` → `Literal["pypdf","opendataloader"] | None` (None = auto-detect)
-- [ ] 1.2 Add `preflight_check() -> tuple[bool, str]` to new `ingest/pdf_preflight.py`
+- [x] 1.2 Add `preflight_check() -> tuple[bool, str]` to new `ingest/pdf_preflight.py`
   - Checks `java -version`, verifies version ≥ 11
   - Checks `opendataloader_pdf` is importable
   - Checks `ODL_HYBRID_URL` is reachable when `ODL_HYBRID` is set
   - Returns `(ok: bool, reason: str)` — never raises
-- [ ] 1.3 Refactor `ingest/loaders.py:load_documents()` to accept optional `parser` kwarg
+- [x] 1.3 Refactor `ingest/loaders.py:load_documents()` to accept optional `parser` kwarg
   - Existing PyPDF path preserved as default/fallback
   - ODL branch stubbed (returns `[]`, raises `NotImplementedError`) until Group 2
-- [ ] 1.4 Update `.env.example` and `PTD.md` with all new config fields
+- [x] 1.4 Update `.env.example` and `PTD.md` with all new config fields
 
 ### Validation Tier 1 — Focused Tests
-- [ ] 1.5 `test_preflight_java_missing`: mock `subprocess.run` to raise `FileNotFoundError` →
+- [x] 1.5 `test_preflight_java_missing`: mock `subprocess.run` to raise `FileNotFoundError` →
   preflight returns `(False, reason containing "Java")`)
-- [ ] 1.6 `test_preflight_java_old`: mock `java -version` output as `1.8.0` → returns
+- [x] 1.6 `test_preflight_java_old`: mock `java -version` output as `1.8.0` → returns
   `(False, reason containing "Java 11")`
-- [ ] 1.7 `test_preflight_ok`: mock valid Java 17 + importable package → returns `(True, "")`
-- [ ] 1.8 `test_config_pdf_parser_default`: `PDF_PARSER=None`, Java present → active parser = ODL
+- [x] 1.7 `test_preflight_ok`: mock valid Java 17 + importable package → returns `(True, "")`
+- [x] 1.8 `test_config_pdf_parser_default`: `PDF_PARSER=None`, Java present → active parser = ODL
 
 ### Validation Tier 2 — PBT
-- [ ] 1.9 PBT: `∀ java_version_string: parse_java_version(s)` returns correct major version
+- [x] 1.9 PBT: `∀ java_version_string: parse_java_version(s)` returns correct major version
   (arbitrary version string inputs — catches edge cases like `"openjdk 11.0.21"`, `"17.0.1"`,
   `"1.8.0_202"`)
 
 ### Security Readiness
-- [ ] 1.10 Verify `preflight_check()` never logs or surfaces the PDF file path
-- [ ] 1.11 Verify config validators reject `PDF_PARSER=arbitrary_string` with clear error
+- [x] 1.10 Verify `preflight_check()` never logs or surfaces the PDF file path
+- [x] 1.11 Verify config validators reject `PDF_PARSER=arbitrary_string` with clear error
 
 ---
 
