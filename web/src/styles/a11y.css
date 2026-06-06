@@ -9,9 +9,16 @@
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
   }
+  .typing-indicator {
+    gap: 2px;
+  }
   .typing-dot {
     animation: none;
     opacity: 0.6;
+  }
+  .typing-dot::after {
+    content: "…";
+    display: inline;
   }
   .code-skeleton-hint {
     animation: none;

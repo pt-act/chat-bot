@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { Source } from "../types";
 
 interface Props {
@@ -15,6 +15,23 @@ function ScoreMeter({ value }: { value: number }) {
 
 export function CitationCards({ sources }: Props) {
   const [open, setOpen] = useState(false);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLUListElement>) => {
+    if (!listRef.current || e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const items = Array.from(listRef.current.querySelectorAll<HTMLElement>(".citation-copy, .citation-snippet-toggle"));
+    const current = document.activeElement as HTMLElement | null;
+    const idx = items.indexOf(current ?? (undefined as unknown as HTMLElement));
+    if (e.key === "ArrowDown") {
+      const next = items[idx + 1] ?? items[0];
+      next?.focus();
+    } else {
+      const prev = items[idx - 1] ?? items[items.length - 1];
+      prev?.focus();
+    }
+  }, []);
+
   if (!sources || sources.length === 0) return null;
 
   return (
@@ -27,9 +44,9 @@ export function CitationCards({ sources }: Props) {
         {open ? "▾" : "▸"} Sources ({sources.length})
       </button>
       {open && (
-        <ul className="citations-list">
+        <ul className="citations-list" ref={listRef} onKeyDown={handleKeyDown}>
           {sources.map((s, i) => (
-            <li key={`${s.doc_id ?? s.label}-${i}`} className="citation">
+            <li key={`${s.doc_id ?? s.label}-${i}`} className="citation" tabIndex={-1}>
               <div className="citation-header">
                 <span className="citation-label">{s.label}</span>
                 {s.page != null && <span className="citation-page">p.{s.page}</span>}
@@ -37,13 +54,14 @@ export function CitationCards({ sources }: Props) {
               </div>
               {s.snippet && (
                 <details className="citation-details">
-                  <summary className="citation-snippet-toggle">Show snippet</summary>
+                  <summary className="citation-snippet-toggle" tabIndex={0}>Show snippet</summary>
                   <p className="citation-snippet">{s.snippet}</p>
                 </details>
               )}
               <button
                 type="button"
                 className="citation-copy"
+                tabIndex={0}
                 onClick={() => {
                   const text = [
                     s.label,

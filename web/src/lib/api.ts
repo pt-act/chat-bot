@@ -28,11 +28,19 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
   return key ? { ...extra, "X-API-Key": key } : extra;
 }
 
+export interface StreamErrorMeta {
+  status?: number;
+  retryAfter?: number;
+  title?: string;
+  detail?: string;
+  correlation_id?: string;
+}
+
 export interface StreamHandlers {
   onToken: (delta: string) => void;
   onSources: (sources: Source[]) => void;
   onDone: (meta: Record<string, unknown>) => void;
-  onError: (message: string) => void;
+  onError: (message: string, meta?: StreamErrorMeta) => void;
 }
 
 interface ChatBody {
@@ -78,12 +86,37 @@ export async function streamChat(
   }
 
   if (resp.status === 429) {
-    const retry = resp.headers.get("Retry-After") ?? "a few";
-    handlers.onError(`Rate limited. Try again in ${retry}s.`);
+    const retry = resp.headers.get("Retry-After") ?? "30";
+    handlers.onError(`Rate limited. Try again in ${retry}s.`, {
+      status: 429,
+      retryAfter: parseInt(retry, 10) || 30,
+    });
     return;
   }
-  if (!resp.ok || !resp.body) {
-    handlers.onError(`Request failed (${resp.status}).`);
+
+  if (!resp.ok) {
+    let title: string | undefined;
+    let detail: string | undefined;
+    let correlation_id: string | undefined;
+    try {
+      const body = await resp.json();
+      title = body.title;
+      detail = body.detail;
+      correlation_id = body.correlation_id;
+    } catch {
+      // non-JSON error body
+    }
+    handlers.onError(detail || title || `Request failed (${resp.status}).`, {
+      status: resp.status,
+      title,
+      detail,
+      correlation_id,
+    });
+    return;
+  }
+
+  if (!resp.body) {
+    handlers.onError("Request failed — no response body.");
     return;
   }
 
@@ -184,6 +217,44 @@ export async function uploadDocument(file: File, userId: string): Promise<Upload
   return (await resp.json()) as UploadResult;
 }
 
+export interface FeedbackBody {
+  rating: "up" | "down";
+  reason?: string;
+  correlation_id?: string | null;
+  question?: string;
+  answer?: string;
+}
+
+export interface FeedbackResult {
+  feedback_id: string;
+  rating: string;
+  status: string;
+}
+
+export async function submitFeedback(body: FeedbackBody): Promise<FeedbackResult> {
+  let resp: Response;
+  try {
+    resp = await fetch(`${API_BASE}/api/v1/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("Network error — could not reach the server.");
+  }
+  if (!resp.ok) {
+    let detail = `Feedback failed (${resp.status}).`;
+    try {
+      const body = await resp.json();
+      detail = body.detail || body.title || detail;
+    } catch {
+      // non-JSON error body
+    }
+    throw new Error(detail);
+  }
+  return (await resp.json()) as FeedbackResult;
+}
+
 export interface Health {
   status: string;
   dependencies: Record<string, string>;
@@ -192,6 +263,16 @@ export interface Health {
 export async function getHealth(): Promise<Health | null> {
   try {
     const r = await fetch("/health");
+    if (!r.ok) return null;
+    return (await r.json()) as Health;
+  } catch {
+    return null;
+  }
+}
+
+export async function getReady(): Promise<Health | null> {
+  try {
+    const r = await fetch("/ready");
     if (!r.ok) return null;
     return (await r.json()) as Health;
   } catch {

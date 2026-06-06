@@ -27,6 +27,14 @@ export interface ChatResponse {
   meta: ChatMeta;
 }
 
+export interface ChatErrorMeta {
+  status?: number;
+  retryAfter?: number;
+  title?: string;
+  detail?: string;
+  correlation_id?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -35,6 +43,7 @@ export interface ChatMessage {
   meta?: ChatMeta;
   streaming?: boolean;
   error?: boolean;
+  errorMeta?: ChatErrorMeta;
 }
 
 // --- Reviewer queue (operator panel) ---

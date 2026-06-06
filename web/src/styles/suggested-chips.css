@@ -1,0 +1,28 @@
+.suggested-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  justify-content: center;
+}
+
+.chip-suggested {
+  background: var(--chip-bg, #f3f4f6);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 16px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text, #111827);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.chip-suggested:hover {
+  background: var(--accent-bg, #e5e7eb);
+  border-color: var(--accent, #2563eb);
+}
+
+.chip-suggested:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: 2px;
+}

@@ -1,12 +1,13 @@
 import { useCallback, useRef, useState } from "react";
 import { streamChat } from "./api";
-import type { ChatMessage, Lang, Mode, Source } from "../types";
+import type { ChatErrorMeta, ChatMessage, Lang, Mode, Source } from "../types";
 
 export interface UseChatStreamReturn {
   messages: ChatMessage[];
   busy: boolean;
   send: (text: string, overrides?: { mode?: Mode; lang?: Lang }) => void;
   stop: () => void;
+  reset: () => void;
   patchLast: (fn: (m: ChatMessage) => ChatMessage) => void;
 }
 
@@ -22,6 +23,12 @@ export function useChatStream(userId: string): UseChatStreamReturn {
       next[next.length - 1] = fn(next[next.length - 1]);
       return next;
     });
+  }, []);
+
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    setMessages([]);
+    setBusy(false);
   }, []);
 
   const send = useCallback(
@@ -50,12 +57,13 @@ export function useChatStream(userId: string): UseChatStreamReturn {
             patchLast((m) => ({ ...m, streaming: false, meta: meta as unknown as ChatMessage["meta"] }));
             setBusy(false);
           },
-          onError: (message) => {
+          onError: (message, meta) => {
             patchLast((m) => ({
               ...m,
               streaming: false,
               error: true,
               content: m.content || message,
+              errorMeta: meta as ChatErrorMeta | undefined,
             }));
             setBusy(false);
           },
@@ -72,5 +80,5 @@ export function useChatStream(userId: string): UseChatStreamReturn {
     setBusy(false);
   }, [patchLast]);
 
-  return { messages, busy, send, stop, patchLast };
+  return { messages, busy, send, stop, reset, patchLast };
 }

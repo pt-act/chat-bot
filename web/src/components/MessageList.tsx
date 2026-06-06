@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, Lang, Mode } from "../types";
 import { dirFor, langFor } from "../lib/rtl";
 import { ActionRow } from "./ActionRow";
 import { CitationCards } from "./CitationCards";
 import { ConfidenceBadge } from "./ConfidenceBadge";
+import { FeedbackRow } from "./FeedbackRow";
+import { InlineError } from "./InlineError";
 import { MarkdownBody } from "./MarkdownBody";
 import { ModeChip, ProvenanceChip } from "./Chips";
 import { RefusalCard } from "./RefusalCard";
 import { StreamingIndicator } from "./StreamingIndicator";
+import { SuggestedChips } from "./SuggestedChips";
 
 const STRICT_REFUSAL_RE = /I don't have information|I don't have any (information|documents)|not in (the )?knowledge base|I cannot (answer|provide|find)/i;
 
@@ -15,9 +18,12 @@ interface Props {
   messages: ChatMessage[];
   onResend?: (q: string, overrides?: Record<string, unknown>) => void;
   onEdit?: (text: string) => void;
+  onSend?: (text: string, overrides?: { mode?: Mode; lang?: Lang }) => void;
+  mode?: Mode;
+  lang?: Lang;
 }
 
-export function MessageList({ messages, onResend, onEdit }: Props) {
+export function MessageList({ messages, onResend, onEdit, onSend, mode = "strict", lang = "auto" }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -40,6 +46,9 @@ export function MessageList({ messages, onResend, onEdit }: Props) {
         <p className="empty-hint">
           e.g. "What is the return window?" · "ما هي سياسة الإرجاع؟"
         </p>
+        {onSend && (
+          <SuggestedChips mode={mode} lang={lang} onSend={onSend} />
+        )}
       </div>
     );
   }
@@ -101,7 +110,6 @@ export function MessageList({ messages, onResend, onEdit }: Props) {
               className={`bubble bubble-assistant${m.error ? " bubble-error" : ""}`}
               dir={dir}
               lang={lang}
-              aria-live={!m.streaming && !m.error ? "polite" : undefined}
             >
               {!m.streaming && !m.error && (
                 <div className="bubble-meta">
@@ -115,6 +123,14 @@ export function MessageList({ messages, onResend, onEdit }: Props) {
                 hasContent={m.content.length > 0}
                 error={m.error && !m.content}
               />
+              {m.error && m.errorMeta && (
+                <InlineError
+                  status={m.errorMeta.status ?? 500}
+                  title={m.errorMeta.title}
+                  detail={m.errorMeta.detail}
+                  correlationId={m.errorMeta.correlation_id}
+                />
+              )}
               {m.content ? (
                 <MarkdownBody content={m.content} streaming={m.streaming ?? false} />
               ) : null}
@@ -130,6 +146,21 @@ export function MessageList({ messages, onResend, onEdit }: Props) {
                   if (q && onResend) onResend(q, {});
                 }}
               />
+              {!m.streaming && !m.error && (
+                <FeedbackRow
+                  question={prevQuestion(messages, i) ?? ""}
+                  answer={m.content}
+                  correlationId={m.meta?.correlation_id}
+                  disabled={false}
+                />
+              )}
+              {isLastAssistant && !m.streaming && onSend && (
+                <SuggestedChips
+                  mode={(m.meta?.mode as Mode) ?? mode}
+                  lang={(m.meta?.lang as Lang) ?? lang}
+                  onSend={onSend}
+                />
+              )}
             </article>
           );
         })}

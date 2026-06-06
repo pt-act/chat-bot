@@ -1,0 +1,10 @@
+.retry-countdown {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--danger, #dc2626);
+  background: #fef2f2;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  text-align: center;
+  font-weight: 500;
+}

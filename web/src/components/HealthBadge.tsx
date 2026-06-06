@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
-import { getHealth } from "../lib/api";
+import { getHealth, getReady } from "../lib/api";
+import type { Health } from "../lib/api";
 
 export function HealthBadge() {
-  const [status, setStatus] = useState<string>("…");
+  const [health, setHealth] = useState<Health | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       const h = await getHealth();
-      if (alive) setStatus(h ? h.status : "offline");
+      if (alive) setHealth(h);
     };
     tick();
     const id = setInterval(tick, 15000);
@@ -18,11 +20,41 @@ export function HealthBadge() {
     };
   }, []);
 
+  const status = health?.status ?? "offline";
   const ok = status === "ok";
+  const degraded = status === "degraded";
+
+  const failedDeps = health?.dependencies
+    ? Object.entries(health.dependencies)
+        .filter(([, v]) => v !== "ok")
+        .map(([k]) => k)
+    : [];
+
+  const handleClick = async () => {
+    const ready = await getReady();
+    if (ready) {
+      setHealth((prev) =>
+        prev
+          ? { ...prev, status: ready.status, dependencies: { ...prev.dependencies, ...ready.dependencies } }
+          : { status: ready.status, dependencies: ready.dependencies },
+      );
+    }
+    setShowDetails(true);
+    setTimeout(() => setShowDetails(false), 5000);
+  };
+
   return (
-    <span className={`health health-${ok ? "ok" : "warn"}`} title={`Backend: ${status}`}>
+    <button
+      type="button"
+      className={`health health-${ok ? "ok" : degraded ? "degraded" : "warn"}`}
+      title={`Backend: ${status}${failedDeps.length > 0 ? ` — ${failedDeps.join(", ")} down` : ""}`}
+      onClick={handleClick}
+    >
       <span className="health-dot" aria-hidden="true" />
       {status}
-    </span>
+      {showDetails && failedDeps.length > 0 && (
+        <span className="health-details">{failedDeps.join(", ")} down</span>
+      )}
+    </button>
   );
 }
