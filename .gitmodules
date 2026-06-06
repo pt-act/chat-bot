@@ -1,0 +1,3 @@
+[submodule "opendataloader-pdf"]
+	path = opendataloader-pdf
+	url = https://github.com/pt-act/opendataloader-pdf.git
