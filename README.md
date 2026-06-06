@@ -1019,7 +1019,7 @@ This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-
 | Streaming | None | SSE token streaming (`POST /api/v1/chat/stream`) |
 | Guardrails | None | Input prompt-injection blocking + output PII masking / length cap |
 | Evaluation | None | RAGAS offline harness (faithfulness / relevancy / context precision+recall) |
-| Web client | None | Vite + React + TypeScript reference SPA (`web/`) |
+| Web client | None | Vite + React + TypeScript SPA with production UX: streaming with smart autoscroll, markdown + Shiki highlighting, trust signals (confidence badges, citation cards with score meters, mode/provenance chips), strict-mode refusal CTA, suggested prompt chips, inline 👍/👎 feedback, conversation export (JSON/Text), new-chat rotation, rate-limit countdown, health badge with `/ready` probe, `sessionStorage` persistence, RTL/Arabic, deferred screen-reader announcements, `prefers-reduced-motion`, keyboard navigation |
 | Authentication | None | API key (FastAPI DI) |
 | SSRF protection | None | Private IP + metadata blocking |
 | Rate limiting | Direct IP only | Proxy-aware (CIDR, X-Forwarded-For) |

@@ -233,7 +233,63 @@ the operator's review queue and the evaluation set, so flagging a bad answer gen
 
 ---
 
-## 9. Tips
+## 9. Using the web client (reference SPA)
+
+A reference single-page app lives in `web/` (Vite + React + TypeScript). It demonstrates
+the API end-to-end with production-grade UX and can be used as-is or adapted into your own
+frontend.
+
+### What it shows
+
+- **Streaming chat** — token-by-token rendering with a typing indicator, smart autoscroll
+  (only when pinned to bottom), and a **"New messages"** button when you scroll up to read
+  history. A **Stop** button aborts mid-stream.
+- **Markdown rendering** — full GitHub-flavored markdown (tables, strikethrough, autolinks)
+  with fenced code blocks buffered until complete (no half-rendered blobs). Code blocks get
+  syntax highlighting via **Shiki** (lazy-loaded, one chunk per language) with a **Copy**
+  button.
+- **Trust signals** — every assistant message carries a **confidence badge** (High/Medium/Low
+  from `meta.grounded_score`), a **mode chip** showing which rule set produced the answer, a
+  **provenance chip** warning "AI-synthesized" when `meta.self_ingested=true`, and collapsible
+  **citation cards** with a score meter, expandable snippet, and copy button.
+- **Strict-mode refusal UX** — when the bot can't answer from the knowledge base, a dedicated
+  card says "Not in the knowledge base" with a **"Answer from general knowledge"** button
+  that re-sends your question in `open` mode without retyping.
+- **Suggested prompts** — 3–4 context-aware chips appear on the empty state and after each
+  turn (e.g., "Explain in Arabic", "Answer from general knowledge"). Clicking sends immediately.
+- **Inline feedback** — 👍/👎 buttons on every assistant message. Downvote reveals an optional
+  text box for the reason. Submits automatically with the `correlation_id`.
+- **Conversation management** — **+ New** starts a fresh conversation (rotates your user ID);
+  **Export** downloads the transcript as JSON or Text. A footer note reminds you that
+  conversations are kept ~24 hours.
+- **Error handling** — friendly inline messages instead of raw JSON; a **rate-limit countdown**
+  bar shows how long to wait on 429; a **"Report issue"** button copies the `correlation_id`
+  to your clipboard for support tickets.
+- **Health badge** — a colored dot in the header polls the backend; click it for an on-demand
+  `/ready` probe that shows which dependency (Redis, ChromaDB) is down if degraded.
+- **Accessibility** — Arabic messages render `dir="rtl"` and `lang="ar"` for correct screen-reader
+  pronunciation; a hidden `aria-live` region announces each completed answer once (not per
+  token); visible focus rings; animations suppressed under `prefers-reduced-motion`.
+- **Keyboard** — Enter to send, Shift+Enter for newline, Escape to stop streaming, arrow keys
+  to navigate citation cards.
+
+### Run it
+
+```bash
+cd web
+bun install      # or npm install
+bun run dev      # http://localhost:5173 (proxies /api and /health to :8000)
+```
+
+```bash
+bun run build    # tsc -b && vite build → web/dist/
+```
+
+Serve `dist/` from any static host; configure `CORS_ORIGINS` or reverse-proxy `/api`.
+
+---
+
+## 10. Tips
 
 - **Quote sources** in your UI using the `sources[]` objects — they make answers
   verifiable; pair them with `meta.grounded` for an honest confidence indicator.
