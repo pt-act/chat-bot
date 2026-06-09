@@ -129,9 +129,9 @@ class TestParserOverride:
 
         # load_documents called with parser="pypdf"
         call_kwargs = mock_load.call_args
-        assert call_kwargs[1].get("parser") == "pypdf" or (
-            len(call_kwargs[0]) >= 3 and call_kwargs[0][2] == "pypdf"
-        ), f"Expected parser='pypdf', got call: {call_kwargs}"
+        assert call_kwargs[1].get("parser") == "pypdf" or (len(call_kwargs[0]) >= 3 and call_kwargs[0][2] == "pypdf"), (
+            f"Expected parser='pypdf', got call: {call_kwargs}"
+        )
         assert diag.get("parser") == "pypdf"
 
 

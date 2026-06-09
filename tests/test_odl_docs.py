@@ -179,16 +179,16 @@ class TestOperatorGuideSecurity:
     def test_warns_against_external_port(self):
         """11.6: operator guide explicitly warns against exposing odl-hybrid port."""
         guide = _OPERATOR_GUIDE.read_text(encoding="utf-8")
-        assert "external" in guide.lower() and (
-            "port" in guide.lower() or "expose" in guide.lower()
-        ), "Operator guide must warn against exposing odl-hybrid port externally"
+        assert "external" in guide.lower() and ("port" in guide.lower() or "expose" in guide.lower()), (
+            "Operator guide must warn against exposing odl-hybrid port externally"
+        )
 
     def test_warns_about_hybrid_url_trust(self):
         """11.7: operator guide warns ODL_HYBRID_URL must point to a trusted host."""
         guide = _OPERATOR_GUIDE.read_text(encoding="utf-8")
-        assert (
-            "trusted" in guide.lower() or "untrusted" in guide.lower()
-        ), "Operator guide must note ODL_HYBRID_URL should point to a trusted host"
+        assert "trusted" in guide.lower() or "untrusted" in guide.lower(), (
+            "Operator guide must note ODL_HYBRID_URL should point to a trusted host"
+        )
 
     def test_warns_about_internal_network(self):
         """Operator guide notes sidecar is internal-only."""
@@ -198,6 +198,6 @@ class TestOperatorGuideSecurity:
     def test_http_https_scheme_validation_documented(self):
         """Operator guide mentions URL scheme validation."""
         guide = _OPERATOR_GUIDE.read_text(encoding="utf-8")
-        assert (
-            "http://" in guide or "https://" in guide
-        ), "Operator guide must document the expected URL scheme for ODL_HYBRID_URL"
+        assert "http://" in guide or "https://" in guide, (
+            "Operator guide must document the expected URL scheme for ODL_HYBRID_URL"
+        )

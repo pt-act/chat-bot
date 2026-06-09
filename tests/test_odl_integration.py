@@ -209,9 +209,9 @@ class TestFullOdlIngestPipeline:
         assert table_chunks, "No L2 chunk with element_type='table' found in output"
         # Table content should have pricing information
         combined = " ".join(c.page_content for c in table_chunks)
-        assert any(
-            kw in combined for kw in ("Starter", "Pro", "Enterprise", "$")
-        ), f"Table chunk content does not contain expected pricing data: {combined[:200]!r}"
+        assert any(kw in combined for kw in ("Starter", "Pro", "Enterprise", "$")), (
+            f"Table chunk content does not contain expected pricing data: {combined[:200]!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

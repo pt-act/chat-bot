@@ -353,9 +353,9 @@ class TestFormulaContentSecurity:
             },
         )
         source = _to_source(doc)
-        assert (
-            source["snippet"] == latex
-        ), f"Formula content should appear verbatim in snippet, got: {source['snippet']!r}"
+        assert source["snippet"] == latex, (
+            f"Formula content should appear verbatim in snippet, got: {source['snippet']!r}"
+        )
         assert source["element_type"] == "formula"
 
     def test_formula_content_not_html_in_source(self):

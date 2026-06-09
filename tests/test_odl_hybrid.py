@@ -76,15 +76,15 @@ class TestHybridFallbackEnabled:
 
             os.unlink(path)
 
-        assert (
-            diag["parser_mode"] == "local"
-        ), f"Expected parser_mode=local when hybrid unreachable+fallback, got {diag['parser_mode']!r}"
+        assert diag["parser_mode"] == "local", (
+            f"Expected parser_mode=local when hybrid unreachable+fallback, got {diag['parser_mode']!r}"
+        )
         assert diag["parser"] == "opendataloader"
         # convert() was called WITHOUT hybrid params
         called_kwargs = mock_odl.convert.call_args[1]
-        assert (
-            "hybrid" not in called_kwargs
-        ), "hybrid param should not be passed to convert() when server is unreachable"
+        assert "hybrid" not in called_kwargs, (
+            "hybrid param should not be passed to convert() when server is unreachable"
+        )
 
     def test_fallback_enabled_returns_documents(self, pdf_v1_bytes):
         """With hybrid unreachable + fallback, ingest still produces chunks."""
@@ -331,6 +331,6 @@ class TestNoExternalPort:
         service = compose["services"]["odl-hybrid"]
         networks = service.get("networks", [])
         # Either listed under networks or using default
-        assert (
-            networks or "networks" not in service or service.get("networks") == ["app-network"]
-        ), "odl-hybrid should be on the internal app-network"
+        assert networks or "networks" not in service or service.get("networks") == ["app-network"], (
+            "odl-hybrid should be on the internal app-network"
+        )

@@ -139,7 +139,7 @@ def _select_documents(vs, question: str, top_k: int, fetch_k: int, strategy: str
     (FR spec 5.11 — clear error, no silent fallthrough).
     """
     if strategy not in _VALID_STRATEGIES:
-        raise ValueError(f"Unknown retrieval strategy {strategy!r}. " f"Valid values: {sorted(_VALID_STRATEGIES)}")
+        raise ValueError(f"Unknown retrieval strategy {strategy!r}. Valid values: {sorted(_VALID_STRATEGIES)}")
     if strategy in ("hybrid", "hybrid_rerank"):
         from ingest.retrieval import hybrid_retrieve, rerank
 

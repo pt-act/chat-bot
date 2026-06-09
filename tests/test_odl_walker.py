@@ -364,7 +364,7 @@ def test_pbt_section_propagation_invariant(doc):
             current_heading_text = el.content
         else:
             assert el.section_title == current_heading_text, (
-                f"element {el.id_!r} has section_title={el.section_title!r}, " f"expected {current_heading_text!r}"
+                f"element {el.id_!r} has section_title={el.section_title!r}, expected {current_heading_text!r}"
             )
 
 

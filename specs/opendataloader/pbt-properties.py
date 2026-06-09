@@ -504,9 +504,9 @@ def test_pbt_l2_parent_chunk_id_always_resolvable(section_count, elements_per_se
 
     for l2 in l2_chunks:
         parent_id = l2["metadata"]["parent_chunk_id"]
-        assert (
-            parent_id in l1_hashes
-        ), f"L2 chunk references parent_chunk_id={parent_id!r} which has no matching L1 chunk"
+        assert parent_id in l1_hashes, (
+            f"L2 chunk references parent_chunk_id={parent_id!r} which has no matching L1 chunk"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +519,7 @@ invalid_parser_values = st.text(min_size=1).filter(lambda s: s not in {"pypdf", 
 valid_pages_pattern = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 
 page_range_valid = st.builds(
-    lambda pages: ",".join(f"{p}-{p+n}" if n > 0 else str(p) for p, n in pages),
+    lambda pages: ",".join(f"{p}-{p + n}" if n > 0 else str(p) for p, n in pages),
     pages=st.lists(
         st.tuples(st.integers(min_value=1, max_value=500), st.integers(min_value=0, max_value=5)),
         min_size=1,

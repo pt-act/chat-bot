@@ -176,18 +176,18 @@ class TestEvalGate:
         fixture_json = _json.loads((_FIXTURES / "simple_mock.json").read_text(encoding="utf-8"))
         chunks = _run_odl_hierarchical(fixture_json)
         metrics = _compute_metrics(chunks, "odl_hierarchical")
-        assert (
-            metrics["section_metadata_coverage"] > 0.0
-        ), "ODL-Hierarchical should produce chunks with section_title metadata"
+        assert metrics["section_metadata_coverage"] > 0.0, (
+            "ODL-Hierarchical should produce chunks with section_title metadata"
+        )
 
     def test_odl_hierarchical_has_table_element(self):
         """ODL-Hierarchical table_element_present=1.0 (fixture has a table element)."""
         fixture_json = _json.loads((_FIXTURES / "simple_mock.json").read_text(encoding="utf-8"))
         chunks = _run_odl_hierarchical(fixture_json)
         metrics = _compute_metrics(chunks, "odl_hierarchical")
-        assert (
-            metrics["table_element_present"] == 1.0
-        ), "ODL-Hierarchical should contain a chunk with element_type='table'"
+        assert metrics["table_element_present"] == 1.0, (
+            "ODL-Hierarchical should contain a chunk with element_type='table'"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -65,9 +65,9 @@ class TestTableQueryBoost:
         results = hierarchical_retrieve(vs, "compare the table data", k=3, fetch_k=10)
 
         assert len(results) <= 3
-        assert (
-            results[0].metadata.get("element_type") == "table"
-        ), f"Expected table chunk first, got {results[0].metadata.get('element_type')!r}"
+        assert results[0].metadata.get("element_type") == "table", (
+            f"Expected table chunk first, got {results[0].metadata.get('element_type')!r}"
+        )
 
     def test_all_table_terms_trigger_boost(self):
         for term in ["table", "row", "column", "compare", "vs", "versus", "list of"]:
@@ -75,9 +75,9 @@ class TestTableQueryBoost:
             para_doc = _doc("Some text", element_type="paragraph", chunk_hash=f"p_{term}")
             vs = _mock_vs([para_doc, table_doc])
             results = hierarchical_retrieve(vs, f"query with {term} here", k=2, fetch_k=5)
-            assert any(
-                r.metadata.get("element_type") == "table" for r in results
-            ), f"Table term '{term}' did not boost table chunk into results"
+            assert any(r.metadata.get("element_type") == "table" for r in results), (
+                f"Table term '{term}' did not boost table chunk into results"
+            )
 
     def test_table_boost_case_insensitive(self):
         table_doc = _doc("| A | B |", element_type="table", chunk_hash="t1")
@@ -103,8 +103,7 @@ class TestOverviewQueryPrefersL1:
         results = hierarchical_retrieve(vs, "overview of section 2", k=3, fetch_k=10)
 
         assert results[0].metadata.get("chunk_level") == 1, (
-            f"Expected L1 chunk first for overview query, got chunk_level="
-            f"{results[0].metadata.get('chunk_level')!r}"
+            f"Expected L1 chunk first for overview query, got chunk_level={results[0].metadata.get('chunk_level')!r}"
         )
 
     def test_all_overview_terms_trigger_preference(self):
