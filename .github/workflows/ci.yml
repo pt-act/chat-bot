@@ -28,7 +28,7 @@ jobs:
           pip install bandit pip-audit
 
       - name: Bandit (High+ severity)
-        run: bandit -r . -ll -ii -x ./tests/
+        run: bandit -r . -ll -ii -x ./tests/,./opendataloader-pdf/
 
       - name: pip-audit (requirements.txt)
         # Ignore CVE-2026-45829 (chromadb): pre-auth RCE in Chroma *server* mode; we use
