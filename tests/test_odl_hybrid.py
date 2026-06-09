@@ -44,6 +44,7 @@ def _make_odl_mock(md_content: str = "# Section\n\nContent") -> MagicMock:
 # 7.6  test_hybrid_url_unreachable_fallback_enabled
 # ---------------------------------------------------------------------------
 
+
 class TestHybridFallbackEnabled:
     def test_unreachable_hybrid_uses_local_java(self, pdf_v1_bytes):
         """When hybrid URL is unreachable and ODL_HYBRID_FALLBACK=true,
@@ -59,11 +60,11 @@ class TestHybridFallbackEnabled:
         try:
             with (
                 patch("ingest.pdf_opendataloader.preflight_check", return_value=(True, "")),
-                patch("ingest.pdf_opendataloader._hybrid_reachable",
-                      return_value=(False, "connection refused")),
+                patch("ingest.pdf_opendataloader._hybrid_reachable", return_value=(False, "connection refused")),
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 s = Settings(
                     odl_hybrid="docling-fast",
                     odl_hybrid_url="http://odl-hybrid:5002",
@@ -75,15 +76,15 @@ class TestHybridFallbackEnabled:
 
             os.unlink(path)
 
-        assert diag["parser_mode"] == "local", (
-            f"Expected parser_mode=local when hybrid unreachable+fallback, got {diag['parser_mode']!r}"
-        )
+        assert (
+            diag["parser_mode"] == "local"
+        ), f"Expected parser_mode=local when hybrid unreachable+fallback, got {diag['parser_mode']!r}"
         assert diag["parser"] == "opendataloader"
         # convert() was called WITHOUT hybrid params
         called_kwargs = mock_odl.convert.call_args[1]
-        assert "hybrid" not in called_kwargs, (
-            "hybrid param should not be passed to convert() when server is unreachable"
-        )
+        assert (
+            "hybrid" not in called_kwargs
+        ), "hybrid param should not be passed to convert() when server is unreachable"
 
     def test_fallback_enabled_returns_documents(self, pdf_v1_bytes):
         """With hybrid unreachable + fallback, ingest still produces chunks."""
@@ -98,11 +99,11 @@ class TestHybridFallbackEnabled:
         try:
             with (
                 patch("ingest.pdf_opendataloader.preflight_check", return_value=(True, "")),
-                patch("ingest.pdf_opendataloader._hybrid_reachable",
-                      return_value=(False, "timeout")),
+                patch("ingest.pdf_opendataloader._hybrid_reachable", return_value=(False, "timeout")),
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 s = Settings(
                     odl_hybrid="docling-fast",
                     odl_hybrid_url="http://odl-hybrid:5002",
@@ -121,6 +122,7 @@ class TestHybridFallbackEnabled:
 # 7.7  test_hybrid_url_unreachable_fallback_disabled
 # ---------------------------------------------------------------------------
 
+
 class TestHybridFallbackDisabled:
     def test_unreachable_hybrid_raises_when_fallback_off(self, pdf_v1_bytes):
         """When hybrid URL is unreachable and ODL_HYBRID_FALLBACK=false,
@@ -136,11 +138,11 @@ class TestHybridFallbackDisabled:
         try:
             with (
                 patch("ingest.pdf_opendataloader.preflight_check", return_value=(True, "")),
-                patch("ingest.pdf_opendataloader._hybrid_reachable",
-                      return_value=(False, "connection refused")),
+                patch("ingest.pdf_opendataloader._hybrid_reachable", return_value=(False, "connection refused")),
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 s = Settings(
                     odl_hybrid="docling-fast",
                     odl_hybrid_url="http://odl-hybrid:5002",
@@ -167,11 +169,14 @@ class TestHybridFallbackDisabled:
         try:
             with (
                 patch("ingest.pdf_opendataloader.preflight_check", return_value=(True, "")),
-                patch("ingest.pdf_opendataloader._hybrid_reachable",
-                      return_value=(False, "connection refused to odl-hybrid:5002")),
+                patch(
+                    "ingest.pdf_opendataloader._hybrid_reachable",
+                    return_value=(False, "connection refused to odl-hybrid:5002"),
+                ),
                 patch.dict(sys.modules, {"opendataloader_pdf": MagicMock()}),
             ):
                 from config import Settings
+
                 s = Settings(
                     odl_hybrid="docling-fast",
                     odl_hybrid_url="http://odl-hybrid:5002",
@@ -191,38 +196,31 @@ class TestHybridFallbackDisabled:
 # 7.8  test_hybrid_compose_profile — compose config structure
 # ---------------------------------------------------------------------------
 
+
 class TestComposeProfile:
     def test_main_compose_has_odl_hybrid_service(self):
         """docker-compose.yml defines an odl-hybrid service."""
         compose = _load_compose(_COMPOSE_PATH)
-        assert "odl-hybrid" in compose.get("services", {}), (
-            "odl-hybrid service missing from docker-compose.yml"
-        )
+        assert "odl-hybrid" in compose.get("services", {}), "odl-hybrid service missing from docker-compose.yml"
 
     def test_main_compose_hybrid_has_profile(self):
         """docker-compose.yml odl-hybrid uses profiles so it isn't started by default."""
         compose = _load_compose(_COMPOSE_PATH)
         service = compose["services"]["odl-hybrid"]
         profiles = service.get("profiles", [])
-        assert "hybrid" in profiles, (
-            f"odl-hybrid in docker-compose.yml should have profiles=[hybrid], got {profiles!r}"
-        )
+        assert "hybrid" in profiles, f"odl-hybrid in docker-compose.yml should have profiles=[hybrid], got {profiles!r}"
 
     def test_local_compose_has_odl_hybrid_with_profile(self):
         """docker-compose.local.yml odl-hybrid uses profiles: ["hybrid"]."""
         compose = _load_compose(_COMPOSE_LOCAL_PATH)
-        assert "odl-hybrid" in compose.get("services", {}), (
-            "odl-hybrid service missing from docker-compose.local.yml"
-        )
+        assert "odl-hybrid" in compose.get("services", {}), "odl-hybrid service missing from docker-compose.local.yml"
         service = compose["services"]["odl-hybrid"]
         assert "hybrid" in service.get("profiles", [])
 
     def test_test_compose_has_odl_hybrid_with_profile(self):
         """docker-compose.test.yml odl-hybrid uses profiles: ["hybrid"]."""
         compose = _load_compose(_COMPOSE_TEST_PATH)
-        assert "odl-hybrid" in compose.get("services", {}), (
-            "odl-hybrid service missing from docker-compose.test.yml"
-        )
+        assert "odl-hybrid" in compose.get("services", {}), "odl-hybrid service missing from docker-compose.test.yml"
         service = compose["services"]["odl-hybrid"]
         assert "hybrid" in service.get("profiles", [])
 
@@ -232,19 +230,19 @@ class TestComposeProfile:
         service = compose["services"]["odl-hybrid"]
         hc = service.get("healthcheck", {})
         test_cmd = " ".join(hc.get("test", []))
-        assert "/health" in test_cmd, (
-            f"odl-hybrid healthcheck should call /health, got: {test_cmd!r}"
-        )
+        assert "/health" in test_cmd, f"odl-hybrid healthcheck should call /health, got: {test_cmd!r}"
 
 
 # ---------------------------------------------------------------------------
 # 7.9  URL scheme validation in _hybrid_reachable
 # ---------------------------------------------------------------------------
 
+
 class TestHybridUrlValidation:
     def test_http_url_accepted(self):
         """Valid http:// URL is accepted."""
         from ingest.pdf_preflight import _hybrid_reachable
+
         with patch("ingest.pdf_preflight.requests.get") as mock_get:
             mock_get.return_value.status_code = 200
             ok, reason = _hybrid_reachable("http://odl-hybrid:5002")
@@ -253,6 +251,7 @@ class TestHybridUrlValidation:
     def test_https_url_accepted(self):
         """Valid https:// URL is accepted."""
         from ingest.pdf_preflight import _hybrid_reachable
+
         with patch("ingest.pdf_preflight.requests.get") as mock_get:
             mock_get.return_value.status_code = 200
             ok, reason = _hybrid_reachable("https://odl-hybrid:5002")
@@ -261,6 +260,7 @@ class TestHybridUrlValidation:
     def test_ftp_scheme_rejected(self):
         """ftp:// URL is rejected before making any network call."""
         from ingest.pdf_preflight import _hybrid_reachable
+
         with patch("ingest.pdf_preflight.requests.get") as mock_get:
             ok, reason = _hybrid_reachable("ftp://odl-hybrid:5002")
         assert ok is False
@@ -270,6 +270,7 @@ class TestHybridUrlValidation:
     def test_file_scheme_rejected(self):
         """file:// URL is rejected."""
         from ingest.pdf_preflight import _hybrid_reachable
+
         with patch("ingest.pdf_preflight.requests.get") as mock_get:
             ok, reason = _hybrid_reachable("file:///etc/passwd")
         assert ok is False
@@ -278,6 +279,7 @@ class TestHybridUrlValidation:
     def test_credentials_in_url_rejected(self):
         """URLs with credentials (user:pass@host) are rejected."""
         from ingest.pdf_preflight import _hybrid_reachable
+
         with patch("ingest.pdf_preflight.requests.get") as mock_get:
             ok, reason = _hybrid_reachable("http://user:pass@evil.com:5002")
         assert ok is False
@@ -286,17 +288,17 @@ class TestHybridUrlValidation:
     def test_health_endpoint_called(self):
         """_hybrid_reachable appends /health to the base URL."""
         from ingest.pdf_preflight import _hybrid_reachable
+
         with patch("ingest.pdf_preflight.requests.get") as mock_get:
             mock_get.return_value.status_code = 200
             _hybrid_reachable("http://odl-hybrid:5002")
         called_url = mock_get.call_args[0][0]
-        assert called_url.endswith("/health"), (
-            f"Expected /health endpoint to be called, got: {called_url!r}"
-        )
+        assert called_url.endswith("/health"), f"Expected /health endpoint to be called, got: {called_url!r}"
 
     def test_trailing_slash_handled(self):
         """Base URL with trailing slash still results in /health call."""
         from ingest.pdf_preflight import _hybrid_reachable
+
         with patch("ingest.pdf_preflight.requests.get") as mock_get:
             mock_get.return_value.status_code = 200
             _hybrid_reachable("http://odl-hybrid:5002/")
@@ -308,15 +310,14 @@ class TestHybridUrlValidation:
 # 7.10  No external port binding for odl-hybrid
 # ---------------------------------------------------------------------------
 
+
 class TestNoExternalPort:
     def test_main_compose_hybrid_no_ports(self):
         """FR 7.10: odl-hybrid in docker-compose.yml exposes no external port."""
         compose = _load_compose(_COMPOSE_PATH)
         service = compose["services"]["odl-hybrid"]
         ports = service.get("ports", [])
-        assert ports == [], (
-            f"odl-hybrid should not expose external ports, got: {ports!r}"
-        )
+        assert ports == [], f"odl-hybrid should not expose external ports, got: {ports!r}"
 
     def test_local_compose_hybrid_no_ports(self):
         compose = _load_compose(_COMPOSE_LOCAL_PATH)
@@ -330,6 +331,6 @@ class TestNoExternalPort:
         service = compose["services"]["odl-hybrid"]
         networks = service.get("networks", [])
         # Either listed under networks or using default
-        assert networks or "networks" not in service or service.get("networks") == ["app-network"], (
-            "odl-hybrid should be on the internal app-network"
-        )
+        assert (
+            networks or "networks" not in service or service.get("networks") == ["app-network"]
+        ), "odl-hybrid should be on the internal app-network"

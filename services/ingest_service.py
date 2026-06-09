@@ -9,7 +9,8 @@ def ingest_file(
     pages: str | None = None,
 ):
     return process_policy(
-        file_name, s3_url,
+        file_name,
+        s3_url,
         parser_override=parser,
         hybrid_mode_override=hybrid_mode,
         pages_override=pages,
@@ -26,7 +27,9 @@ def ingest_local_file(
 ):
     """Ingest a locally-saved (uploaded) document. `file_path` is removed when done."""
     return process_uploaded(
-        file_name, file_path, ext,
+        file_name,
+        file_path,
+        ext,
         parser_override=parser,
         hybrid_mode_override=hybrid_mode,
         pages_override=pages,

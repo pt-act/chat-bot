@@ -25,6 +25,7 @@ from schemas.ingest import _PAGES_PATTERN, IngestRequest
 # 6.6 / 6.7  _to_source — new fields present and absent
 # ---------------------------------------------------------------------------
 
+
 class TestToSourceNewFields:
     def test_odl_chunk_maps_all_four_fields(self):
         """ODL chunk with all metadata populated → all four new Source fields non-None."""
@@ -93,6 +94,7 @@ class TestToSourceNewFields:
 # 6.8  parser override forces PyPDF
 # ---------------------------------------------------------------------------
 
+
 class TestParserOverride:
     def test_pypdf_override_in_build_chunks(self, ingest_env):
         """parser_override='pypdf' forces PyPDF regardless of ODL availability."""
@@ -112,11 +114,14 @@ class TestParserOverride:
                 patch("ingest.pdf_preflight.preflight_check", return_value=(True, "")),
                 patch("ingest.policies.load_documents") as mock_load,
             ):
-                mock_load.return_value = [
-                    Document(page_content="PyPDF content", metadata={"page": 0})
-                ]
+                mock_load.return_value = [Document(page_content="PyPDF content", metadata={"page": 0})]
                 chunks, _, diag = _build_chunks(
-                    path, "test-doc", "test.pdf", "abc", "v1", ".pdf",
+                    path,
+                    "test-doc",
+                    "test.pdf",
+                    "abc",
+                    "v1",
+                    ".pdf",
                     parser_override="pypdf",
                 )
         finally:
@@ -133,6 +138,7 @@ class TestParserOverride:
 # ---------------------------------------------------------------------------
 # 6.9  Invalid parser value → 422
 # ---------------------------------------------------------------------------
+
 
 class TestIngestRequestValidation:
     def test_valid_parser_pypdf_accepted(self):
@@ -161,6 +167,7 @@ class TestIngestRequestValidation:
 
     def test_invalid_parser_raises(self):
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError):
             IngestRequest(
                 file_name="testdoc",
@@ -178,6 +185,7 @@ class TestIngestRequestValidation:
 
     def test_invalid_hybrid_mode_raises(self):
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError):
             IngestRequest(
                 file_name="testdoc",
@@ -203,6 +211,7 @@ class TestIngestRequestValidation:
 
     def test_invalid_pages_raises(self):
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError):
             IngestRequest(
                 file_name="testdoc",
@@ -224,6 +233,7 @@ class TestIngestRequestValidation:
 # ---------------------------------------------------------------------------
 # 6.9  API endpoint rejects invalid parser (HTTP 422)
 # ---------------------------------------------------------------------------
+
 
 class TestApiParserValidation:
     def test_invalid_parser_returns_422(self):
@@ -259,6 +269,7 @@ class TestApiParserValidation:
 # 6.10  bbox validation
 # ---------------------------------------------------------------------------
 
+
 class TestBboxValidation:
     def test_valid_bbox_accepted(self):
         bbox = [72.0, 680.0, 540.0, 740.0]
@@ -269,7 +280,7 @@ class TestBboxValidation:
         assert _validate_bbox(None) is None
 
     def test_wrong_length_returns_none(self):
-        assert _validate_bbox([1.0, 2.0, 3.0]) is None       # 3 elements
+        assert _validate_bbox([1.0, 2.0, 3.0]) is None  # 3 elements
         assert _validate_bbox([1.0, 2.0, 3.0, 4.0, 5.0]) is None  # 5 elements
 
     def test_nan_returns_none(self):
@@ -292,11 +303,15 @@ class TestBboxValidation:
         """Bad bbox from ODL JSON is silently dropped to None in L2 metadata."""
         from ingest.pdf_opendataloader import OdlElement, build_hierarchical_chunks
 
-        el_heading = OdlElement(id_=1, page_number=1, element_type="heading",
-                                content="Section", heading_level=1)
-        el_para = OdlElement(id_=2, page_number=1, element_type="paragraph",
-                             content="Body text", section_title="Section",
-                             bbox=[float("nan"), 0.0, 100.0, 20.0])
+        el_heading = OdlElement(id_=1, page_number=1, element_type="heading", content="Section", heading_level=1)
+        el_para = OdlElement(
+            id_=2,
+            page_number=1,
+            element_type="paragraph",
+            content="Body text",
+            section_title="Section",
+            bbox=[float("nan"), 0.0, 100.0, 20.0],
+        )
 
         _, l2 = build_hierarchical_chunks([el_heading, el_para])
         assert l2[0].metadata.get("bbox") is None
@@ -304,12 +319,11 @@ class TestBboxValidation:
     def test_build_hierarchical_chunks_preserves_valid_bbox(self):
         from ingest.pdf_opendataloader import OdlElement, build_hierarchical_chunks
 
-        el_heading = OdlElement(id_=1, page_number=1, element_type="heading",
-                                content="Section", heading_level=1)
+        el_heading = OdlElement(id_=1, page_number=1, element_type="heading", content="Section", heading_level=1)
         valid_bbox = [10.0, 20.0, 300.0, 50.0]
-        el_para = OdlElement(id_=2, page_number=1, element_type="paragraph",
-                             content="Body", section_title="Section",
-                             bbox=valid_bbox)
+        el_para = OdlElement(
+            id_=2, page_number=1, element_type="paragraph", content="Body", section_title="Section", bbox=valid_bbox
+        )
 
         _, l2 = build_hierarchical_chunks([el_heading, el_para])
         assert l2[0].metadata.get("bbox") == valid_bbox
@@ -319,14 +333,13 @@ class TestBboxValidation:
 # 6.11  pages validation
 # ---------------------------------------------------------------------------
 
+
 class TestPagesValidation:
     @pytest.mark.parametrize("valid", ["1", "1-10", "1-5,8", "1-5,8,12-15", "100"])
     def test_valid_pages_accepted(self, valid):
         assert _PAGES_PATTERN.match(valid), f"Expected {valid!r} to be valid"
 
-    @pytest.mark.parametrize("invalid", [
-        "../etc/passwd", "; rm -rf /", "$(whoami)", "abc", "1-", "-5", "1--10", ""
-    ])
+    @pytest.mark.parametrize("invalid", ["../etc/passwd", "; rm -rf /", "$(whoami)", "abc", "1-", "-5", "1--10", ""])
     def test_invalid_pages_rejected(self, invalid):
         assert not _PAGES_PATTERN.match(invalid), f"Expected {invalid!r} to be invalid"
 
@@ -348,6 +361,7 @@ class TestPagesValidation:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 with pytest.raises(ValueError, match="pages must be"):
                     load_pdf_odl(path, settings=Settings(), pages="../hack")
         finally:
@@ -380,6 +394,7 @@ class TestPagesValidation:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 load_pdf_odl(path, settings=Settings(), pages="1-5")
         finally:
             import os

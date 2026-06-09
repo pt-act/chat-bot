@@ -30,8 +30,8 @@ from ingest.retrieval import (
 # Document helpers
 # ---------------------------------------------------------------------------
 
-def _doc(content: str, chunk_level=None, element_type=None,
-         chunk_hash=None, parent_chunk_id=None) -> Document:
+
+def _doc(content: str, chunk_level=None, element_type=None, chunk_hash=None, parent_chunk_id=None) -> Document:
     meta: dict = {}
     if chunk_level is not None:
         meta["chunk_level"] = chunk_level
@@ -54,22 +54,20 @@ def _mock_vs(docs: list[Document]) -> MagicMock:
 # 5.5  test_table_query_boosts_table_chunks
 # ---------------------------------------------------------------------------
 
+
 class TestTableQueryBoost:
     def test_table_chunk_first_for_table_query(self):
-        para = _doc("Paragraph text", chunk_level=2, element_type="paragraph",
-                    chunk_hash="hash_p")
-        section = _doc("# Section\n\nText", chunk_level=1, element_type="section",
-                       chunk_hash="hash_s")
-        table = _doc("| Col A | Col B |", chunk_level=2, element_type="table",
-                     chunk_hash="hash_t")
+        para = _doc("Paragraph text", chunk_level=2, element_type="paragraph", chunk_hash="hash_p")
+        section = _doc("# Section\n\nText", chunk_level=1, element_type="section", chunk_hash="hash_s")
+        table = _doc("| Col A | Col B |", chunk_level=2, element_type="table", chunk_hash="hash_t")
 
         vs = _mock_vs([para, section, table])
         results = hierarchical_retrieve(vs, "compare the table data", k=3, fetch_k=10)
 
         assert len(results) <= 3
-        assert results[0].metadata.get("element_type") == "table", (
-            f"Expected table chunk first, got {results[0].metadata.get('element_type')!r}"
-        )
+        assert (
+            results[0].metadata.get("element_type") == "table"
+        ), f"Expected table chunk first, got {results[0].metadata.get('element_type')!r}"
 
     def test_all_table_terms_trigger_boost(self):
         for term in ["table", "row", "column", "compare", "vs", "versus", "list of"]:
@@ -77,9 +75,9 @@ class TestTableQueryBoost:
             para_doc = _doc("Some text", element_type="paragraph", chunk_hash=f"p_{term}")
             vs = _mock_vs([para_doc, table_doc])
             results = hierarchical_retrieve(vs, f"query with {term} here", k=2, fetch_k=5)
-            assert any(r.metadata.get("element_type") == "table" for r in results), (
-                f"Table term '{term}' did not boost table chunk into results"
-            )
+            assert any(
+                r.metadata.get("element_type") == "table" for r in results
+            ), f"Table term '{term}' did not boost table chunk into results"
 
     def test_table_boost_case_insensitive(self):
         table_doc = _doc("| A | B |", element_type="table", chunk_hash="t1")
@@ -93,14 +91,12 @@ class TestTableQueryBoost:
 # 5.6  test_overview_query_prefers_l1
 # ---------------------------------------------------------------------------
 
+
 class TestOverviewQueryPrefersL1:
     def test_l1_first_for_overview_query(self):
-        para1 = _doc("First paragraph", chunk_level=2, element_type="paragraph",
-                     chunk_hash="hash_p1")
-        para2 = _doc("Second paragraph", chunk_level=2, element_type="paragraph",
-                     chunk_hash="hash_p2")
-        section = _doc("# Section\n\nIntro text", chunk_level=1, element_type="section",
-                       chunk_hash="hash_s")
+        para1 = _doc("First paragraph", chunk_level=2, element_type="paragraph", chunk_hash="hash_p1")
+        para2 = _doc("Second paragraph", chunk_level=2, element_type="paragraph", chunk_hash="hash_p2")
+        section = _doc("# Section\n\nIntro text", chunk_level=1, element_type="section", chunk_hash="hash_s")
 
         # similarity_search ranks para1, para2 higher than section
         vs = _mock_vs([para1, para2, section])
@@ -113,15 +109,11 @@ class TestOverviewQueryPrefersL1:
 
     def test_all_overview_terms_trigger_preference(self):
         for term in ["overview", "summary", "introduction", "what is", "about"]:
-            l1 = _doc("# Title\n\nContent", chunk_level=1, element_type="section",
-                      chunk_hash=f"l1_{term}")
-            l2 = _doc("Body text", chunk_level=2, element_type="paragraph",
-                      chunk_hash=f"l2_{term}")
+            l1 = _doc("# Title\n\nContent", chunk_level=1, element_type="section", chunk_hash=f"l1_{term}")
+            l2 = _doc("Body text", chunk_level=2, element_type="paragraph", chunk_hash=f"l2_{term}")
             vs = _mock_vs([l2, l1])
             results = hierarchical_retrieve(vs, f"{term} of the document", k=2, fetch_k=5)
-            assert results[0].metadata.get("chunk_level") == 1, (
-                f"Overview term '{term}' did not prefer L1"
-            )
+            assert results[0].metadata.get("chunk_level") == 1, f"Overview term '{term}' did not prefer L1"
 
     def test_no_heuristic_preserves_similarity_order(self):
         """Neutral query → original similarity order is preserved."""
@@ -137,15 +129,15 @@ class TestOverviewQueryPrefersL1:
 # 5.7  test_context_expansion
 # ---------------------------------------------------------------------------
 
+
 class TestContextExpansion:
     def test_l1_parent_appended_when_room(self):
         """L1 parent (not in top-k) is appended via expansion when room allows."""
-        l1 = _doc("# Section\n\nFull section content", chunk_level=1,
-                  element_type="section", chunk_hash="l1hash")
-        l2 = _doc("Element text", chunk_level=2, element_type="paragraph",
-                  chunk_hash="l2hash", parent_chunk_id="l1hash")
-        other = _doc("Other content", chunk_level=2, element_type="paragraph",
-                     chunk_hash="other_hash")
+        l1 = _doc("# Section\n\nFull section content", chunk_level=1, element_type="section", chunk_hash="l1hash")
+        l2 = _doc(
+            "Element text", chunk_level=2, element_type="paragraph", chunk_hash="l2hash", parent_chunk_id="l1hash"
+        )
+        other = _doc("Other content", chunk_level=2, element_type="paragraph", chunk_hash="other_hash")
 
         # similarity_search returns [l2, other, l1] — l1 is low in similarity ranking
         vs = _mock_vs([l2, other, l1])
@@ -155,17 +147,13 @@ class TestContextExpansion:
         results = hierarchical_retrieve(vs, "neutral query", k=2, fetch_k=10)
 
         result_hashes = {r.metadata.get("chunk_hash") for r in results}
-        assert "l1hash" in result_hashes, (
-            "L1 parent should be in results via context expansion"
-        )
+        assert "l1hash" in result_hashes, "L1 parent should be in results via context expansion"
         assert len(results) <= 2
 
     def test_expansion_skipped_when_parent_already_present(self):
         """No duplicate L1 when parent is already selected via similarity."""
-        l1 = _doc("# Section", chunk_level=1, element_type="section",
-                  chunk_hash="l1hash")
-        l2 = _doc("Element", chunk_level=2, element_type="paragraph",
-                  chunk_hash="l2hash", parent_chunk_id="l1hash")
+        l1 = _doc("# Section", chunk_level=1, element_type="section", chunk_hash="l1hash")
+        l2 = _doc("Element", chunk_level=2, element_type="paragraph", chunk_hash="l2hash", parent_chunk_id="l1hash")
 
         vs = _mock_vs([l1, l2])
         results = hierarchical_retrieve(vs, "neutral", k=3, fetch_k=10)
@@ -175,8 +163,9 @@ class TestContextExpansion:
 
     def test_expansion_skipped_when_parent_not_in_pool(self):
         """No error when L1 parent is not in the candidate pool."""
-        l2 = _doc("Element", chunk_level=2, element_type="paragraph",
-                  chunk_hash="l2hash", parent_chunk_id="nonexistent_hash")
+        l2 = _doc(
+            "Element", chunk_level=2, element_type="paragraph", chunk_hash="l2hash", parent_chunk_id="nonexistent_hash"
+        )
 
         vs = _mock_vs([l2])
         results = hierarchical_retrieve(vs, "neutral", k=3, fetch_k=10)
@@ -186,10 +175,8 @@ class TestContextExpansion:
     def test_expansion_respects_k_limit(self):
         """After expansion, result count never exceeds k."""
         l1 = _doc("# S", chunk_level=1, element_type="section", chunk_hash="l1h")
-        l2a = _doc("A", chunk_level=2, element_type="paragraph",
-                   chunk_hash="l2a", parent_chunk_id="l1h")
-        l2b = _doc("B", chunk_level=2, element_type="paragraph",
-                   chunk_hash="l2b", parent_chunk_id="l1h")
+        l2a = _doc("A", chunk_level=2, element_type="paragraph", chunk_hash="l2a", parent_chunk_id="l1h")
+        l2b = _doc("B", chunk_level=2, element_type="paragraph", chunk_hash="l2b", parent_chunk_id="l1h")
 
         vs = _mock_vs([l2a, l2b, l1])
         results = hierarchical_retrieve(vs, "query", k=2, fetch_k=10)
@@ -199,6 +186,7 @@ class TestContextExpansion:
 # ---------------------------------------------------------------------------
 # 5.8  test_non_odl_chunks_unaffected
 # ---------------------------------------------------------------------------
+
 
 class TestNonOdlChunksUnaffected:
     def test_legacy_chunks_no_keyerror(self):
@@ -225,10 +213,8 @@ class TestNonOdlChunksUnaffected:
 
     def test_mixed_odl_and_legacy_chunks(self):
         """Mix of ODL and legacy chunks works without error."""
-        odl = _doc("ODL content", chunk_level=1, element_type="section",
-                   chunk_hash="odl_h")
-        legacy = Document(page_content="Legacy content",
-                          metadata={"source_file": "old.pdf"})
+        odl = _doc("ODL content", chunk_level=1, element_type="section", chunk_hash="odl_h")
+        legacy = Document(page_content="Legacy content", metadata={"source_file": "old.pdf"})
         vs = _mock_vs([odl, legacy])
         results = hierarchical_retrieve(vs, "overview summary", k=2, fetch_k=5)
         assert len(results) <= 2
@@ -238,15 +224,17 @@ class TestNonOdlChunksUnaffected:
 # 5.9  PBT: result count ≤ k
 # ---------------------------------------------------------------------------
 
-_doc_meta_strategy = st.fixed_dictionaries({
-    "chunk_level": st.one_of(st.none(), st.just(1), st.just(2)),
-    "element_type": st.one_of(
-        st.none(),
-        st.sampled_from(["table", "paragraph", "section", "list"]),
-    ),
-    "chunk_hash": st.one_of(st.none(), st.text(min_size=1, max_size=32)),
-    "parent_chunk_id": st.one_of(st.none(), st.text(min_size=1, max_size=32)),
-})
+_doc_meta_strategy = st.fixed_dictionaries(
+    {
+        "chunk_level": st.one_of(st.none(), st.just(1), st.just(2)),
+        "element_type": st.one_of(
+            st.none(),
+            st.sampled_from(["table", "paragraph", "section", "list"]),
+        ),
+        "chunk_hash": st.one_of(st.none(), st.text(min_size=1, max_size=32)),
+        "parent_chunk_id": st.one_of(st.none(), st.text(min_size=1, max_size=32)),
+    }
+)
 
 _doc_strategy = st.builds(
     lambda content, meta: Document(page_content=content, metadata=meta),
@@ -271,6 +259,7 @@ def test_pbt_result_count_never_exceeds_k(docs, query, k):
 # 5.10  Security: term matching is case-insensitive substring, no regex
 # ---------------------------------------------------------------------------
 
+
 class TestTermMatchingSecurity:
     def test_table_terms_are_plain_strings_not_regex(self):
         """TABLE_QUERY_TERMS are plain frozenset of strings, no regex patterns."""
@@ -278,6 +267,7 @@ class TestTermMatchingSecurity:
             assert isinstance(term, str)
             # No regex metacharacters
             import re
+
             try:
                 re.compile(term)
             except re.error:
@@ -308,6 +298,7 @@ class TestTermMatchingSecurity:
 # 5.11  Security: unknown strategy raises before DB call
 # ---------------------------------------------------------------------------
 
+
 class TestStrategyDispatchSecurity:
     def test_unknown_strategy_raises_value_error(self):
         """_select_documents raises ValueError for unknown strategy — no DB call."""
@@ -333,12 +324,14 @@ class TestStrategyDispatchSecurity:
     def test_config_rejects_invalid_retrieval_strategy(self):
         """Settings validator blocks invalid RETRIEVAL_STRATEGY at startup."""
         from config import Settings
+
         with pytest.raises(ValueError, match="RETRIEVAL_STRATEGY"):
             Settings(retrieval_strategy="unknown_mode")
 
     def test_config_accepts_hierarchical(self):
         """Settings accepts 'hierarchical' as a valid retrieval strategy."""
         from config import Settings
+
         s = Settings(retrieval_strategy="hierarchical")
         assert s.retrieval_strategy == "hierarchical"
 
@@ -347,14 +340,13 @@ class TestStrategyDispatchSecurity:
 # _snippet: Markdown heading skipping
 # ---------------------------------------------------------------------------
 
+
 class TestSnippet:
     def test_heading_chunk_skips_title_line(self):
         """_snippet skips the '# Title' line for L1 Markdown chunks."""
         text = "# Section Title\n\nThis is the actual content of the section."
         result = _snippet(text)
-        assert result.startswith("This is"), (
-            f"Expected snippet to start with body content, got: {result!r}"
-        )
+        assert result.startswith("This is"), f"Expected snippet to start with body content, got: {result!r}"
         assert "Section Title" not in result
 
     def test_heading_only_chunk_returns_content(self):

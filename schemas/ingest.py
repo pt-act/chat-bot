@@ -39,7 +39,7 @@ def sanitize_doc_id(raw: str) -> str:
     return slug or "document"
 
 
-_PAGES_PATTERN = re.compile(r'^\d+(-\d+)?(,\d+(-\d+)?)*$')
+_PAGES_PATTERN = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 
 
 class IngestRequest(BaseModel):
@@ -52,9 +52,7 @@ class IngestRequest(BaseModel):
     hybrid_mode: Literal["auto", "full"] | None = Field(
         default=None, description="Hybrid routing mode override (requires ODL_HYBRID configured)."
     )
-    pages: str | None = Field(
-        default=None, description="Page range to ingest, e.g. '1-10' or '1-5,8,12-15'."
-    )
+    pages: str | None = Field(default=None, description="Page range to ingest, e.g. '1-10' or '1-5,8,12-15'.")
 
     @field_validator("s3_url")
     @classmethod
@@ -73,7 +71,5 @@ class IngestRequest(BaseModel):
     @classmethod
     def validate_pages_format(cls, v: str | None) -> str | None:
         if v is not None and not _PAGES_PATTERN.match(v):
-            raise ValueError(
-                f"pages must be a page range like '1-10' or '1-5,8,12-15' — got {v!r}"
-            )
+            raise ValueError(f"pages must be a page range like '1-10' or '1-5,8,12-15' — got {v!r}")
         return v

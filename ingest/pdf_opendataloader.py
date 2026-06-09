@@ -37,17 +37,26 @@ logger = logging.getLogger(__name__)
 _PAGE_SEP = "\n---\n"
 
 # Element types whose text is fully captured by _extract_content (no further walker descent).
-_LEAF_TYPES = frozenset({
-    "heading", "paragraph", "caption",
-    "table", "list",
-    "image", "formula", "picture",
-    "header", "footer",
-})
+_LEAF_TYPES = frozenset(
+    {
+        "heading",
+        "paragraph",
+        "caption",
+        "table",
+        "list",
+        "image",
+        "formula",
+        "picture",
+        "header",
+        "footer",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class OdlElement:
@@ -68,6 +77,7 @@ class OdlElement:
 # ---------------------------------------------------------------------------
 # Content extraction
 # ---------------------------------------------------------------------------
+
 
 def _extract_content(element: dict, include_header_footer: bool = False) -> str:
     """Recursively extract plain text from an ODL JSON element.
@@ -121,6 +131,7 @@ def _extract_content(element: dict, include_header_footer: bool = False) -> str:
 # ---------------------------------------------------------------------------
 # Tree walker
 # ---------------------------------------------------------------------------
+
 
 def walk_tree(
     doc: dict,
@@ -176,6 +187,7 @@ def walk_tree(
 # Multi-page table merger
 # ---------------------------------------------------------------------------
 
+
 def merge_tables(elements: list[OdlElement]) -> list[OdlElement]:
     """Merge tables linked by ``next_table_id`` into single logical elements.
 
@@ -186,9 +198,7 @@ def merge_tables(elements: list[OdlElement]) -> list[OdlElement]:
     if not elements:
         return []
 
-    table_by_id: dict[int, OdlElement] = {
-        el.id_: el for el in elements if el.element_type == "table"
-    }
+    table_by_id: dict[int, OdlElement] = {el.id_: el for el in elements if el.element_type == "table"}
     absorbed: set[int] = set()
     result: list[OdlElement] = []
 
@@ -229,6 +239,7 @@ def merge_tables(elements: list[OdlElement]) -> list[OdlElement]:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _approx_page_count(md_text: str) -> int:
     """Estimate page count from horizontal-rule page separators."""
     return max(1, md_text.count(_PAGE_SEP) + 1)
@@ -236,13 +247,12 @@ def _approx_page_count(md_text: str) -> int:
 
 def _make_splitter(chunk_size: int = 800, chunk_overlap: int = 100) -> RecursiveCharacterTextSplitter:
     return RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size, chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ".", " ", ""]
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap, separators=["\n\n", "\n", ".", " ", ""]
     )
 
 
 # Allowed page-range pattern — validated before passing to the convert() subprocess.
-_PAGES_RE = re.compile(r'^\d+(-\d+)?(,\d+(-\d+)?)*$')
+_PAGES_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 
 
 def _validate_bbox(bbox) -> list[float] | None:
@@ -277,6 +287,7 @@ def _odl_chunk_hash(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Hierarchical chunk builder (Group 4)
 # ---------------------------------------------------------------------------
+
 
 def build_hierarchical_chunks(
     elements: list[OdlElement],
@@ -357,42 +368,46 @@ def build_hierarchical_chunks(
             if first_l1_hash is None:
                 first_l1_hash = part_hash
 
-            l1_chunks.append(Document(
-                page_content=cleaned,
-                metadata={
-                    "page": section_page,
-                    "chunk_level": 1,
-                    "section_title": section_title,
-                    "element_type": "section",
-                    "parent_chunk_id": None,
-                    "heading_level": heading_level,
-                    "bbox": None,
-                    "page_end": section_page_end,
-                    # Pre-computed so tests can verify referential integrity without
-                    # going through _build_chunks().  policies._build_chunks will
-                    # recompute and store the same value under "chunk_hash".
-                    "chunk_hash": part_hash,
-                },
-            ))
+            l1_chunks.append(
+                Document(
+                    page_content=cleaned,
+                    metadata={
+                        "page": section_page,
+                        "chunk_level": 1,
+                        "section_title": section_title,
+                        "element_type": "section",
+                        "parent_chunk_id": None,
+                        "heading_level": heading_level,
+                        "bbox": None,
+                        "page_end": section_page_end,
+                        # Pre-computed so tests can verify referential integrity without
+                        # going through _build_chunks().  policies._build_chunks will
+                        # recompute and store the same value under "chunk_hash".
+                        "chunk_hash": part_hash,
+                    },
+                )
+            )
 
         # --- Build L2 element Documents ---
         for el in body:
             content = _clean_odl_text(el.content)
             if not content:
                 continue
-            l2_chunks.append(Document(
-                page_content=content,
-                metadata={
-                    "page": el.page_number,
-                    "chunk_level": 2,
-                    "section_title": el.section_title,
-                    "element_type": el.element_type,
-                    "parent_chunk_id": first_l1_hash,
-                    "heading_level": None,
-                    "bbox": _validate_bbox(el.bbox),  # FR 6.10: sanitise before storage
-                    "page_end": el.page_end,
-                },
-            ))
+            l2_chunks.append(
+                Document(
+                    page_content=content,
+                    metadata={
+                        "page": el.page_number,
+                        "chunk_level": 2,
+                        "section_title": el.section_title,
+                        "element_type": el.element_type,
+                        "parent_chunk_id": first_l1_hash,
+                        "heading_level": None,
+                        "bbox": _validate_bbox(el.bbox),  # FR 6.10: sanitise before storage
+                        "page_end": el.page_end,
+                    },
+                )
+            )
 
     return l1_chunks, l2_chunks
 
@@ -403,18 +418,23 @@ def _pypdf_fallback(file_path: str) -> tuple[list[Document], list, dict]:
     chunks = _make_splitter().split_documents(pages)
     for doc in chunks:
         doc.metadata.update({"parser": "pypdf", "fallback_used": True, "parser_mode": "local"})
-    return chunks, [], {
-        "parser": "pypdf",
-        "fallback_used": "true",
-        "page_count": str(len(pages)),
-        "element_count": str(len(chunks)),
-        "parser_mode": "local",
-    }
+    return (
+        chunks,
+        [],
+        {
+            "parser": "pypdf",
+            "fallback_used": "true",
+            "page_count": str(len(pages)),
+            "element_count": str(len(chunks)),
+            "parser_mode": "local",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def load_pdf_odl(
     file_path: str,
@@ -440,9 +460,7 @@ def load_pdf_odl(
 
     # FR 6.11: validate pages before it reaches the convert() subprocess.
     if pages is not None and not _PAGES_RE.match(pages):
-        raise ValueError(
-            f"pages must be a range like '1-10' or '1-5,8,12-15' — got {pages!r}"
-        )
+        raise ValueError(f"pages must be a range like '1-10' or '1-5,8,12-15' — got {pages!r}")
 
     ok, reason = preflight_check()
     if not ok:
@@ -504,9 +522,7 @@ def load_pdf_odl(
 
         md_path = Path(tmp_dir) / f"{stem}.md"
         if not md_path.exists():
-            raise RuntimeError(
-                f"ODL did not produce expected Markdown file '{md_path.name}'"
-            )
+            raise RuntimeError(f"ODL did not produce expected Markdown file '{md_path.name}'")
 
         md_text = md_path.read_text(encoding="utf-8")
         page_count = _approx_page_count(md_text)
@@ -545,13 +561,17 @@ def load_pdf_odl(
         # element_count: prefer walker element count; fall back to chunk count.
         element_count = len(elements) if elements else len(chunks)
 
-        return chunks, elements, {
-            "parser": "opendataloader",
-            "fallback_used": "false",
-            "page_count": str(page_count),
-            "element_count": str(element_count),
-            "parser_mode": parser_mode,
-        }
+        return (
+            chunks,
+            elements,
+            {
+                "parser": "opendataloader",
+                "fallback_used": "false",
+                "page_count": str(page_count),
+                "element_count": str(element_count),
+                "parser_mode": parser_mode,
+            },
+        )
 
     except Exception as exc:
         if settings.pdf_parser_fallback:

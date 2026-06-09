@@ -42,6 +42,7 @@ def _load_fixture_md(name: str) -> str:
 # Mock ODL helper
 # ---------------------------------------------------------------------------
 
+
 def _make_odl_mock(json_data: dict, md_content: str) -> MagicMock:
     """Mock opendataloader_pdf.convert() that writes fixture files to output_dir."""
 
@@ -59,6 +60,7 @@ def _make_odl_mock(json_data: dict, md_content: str) -> MagicMock:
 # ---------------------------------------------------------------------------
 # 10.2  test_full_odl_ingest_pipeline
 # ---------------------------------------------------------------------------
+
 
 class TestFullOdlIngestPipeline:
     def test_builds_l1_and_l2_chunks(self, ingest_env, simple_pdf_bytes):
@@ -82,8 +84,12 @@ class TestFullOdlIngestPipeline:
                 from ingest.policies import _build_chunks
 
                 chunks, _hashes, diag = _build_chunks(
-                    path, "simple-doc", "simple.pdf", "abc123",
-                    "2024-01-01T00:00:00Z", ".pdf",
+                    path,
+                    "simple-doc",
+                    "simple.pdf",
+                    "abc123",
+                    "2024-01-01T00:00:00Z",
+                    ".pdf",
                 )
         finally:
             os.unlink(path)
@@ -114,8 +120,14 @@ class TestFullOdlIngestPipeline:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from ingest.policies import _build_chunks
+
                 chunks, _, _ = _build_chunks(
-                    path, "doc", "simple.pdf", "h", "v", ".pdf",
+                    path,
+                    "doc",
+                    "simple.pdf",
+                    "h",
+                    "v",
+                    ".pdf",
                 )
         finally:
             os.unlink(path)
@@ -144,8 +156,14 @@ class TestFullOdlIngestPipeline:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from ingest.policies import _build_chunks
+
                 chunks, _, _ = _build_chunks(
-                    path, "doc", "simple.pdf", "h", "v", ".pdf",
+                    path,
+                    "doc",
+                    "simple.pdf",
+                    "h",
+                    "v",
+                    ".pdf",
                 )
         finally:
             os.unlink(path)
@@ -154,9 +172,7 @@ class TestFullOdlIngestPipeline:
         l2 = [c for c in chunks if c.metadata.get("chunk_level") == 2]
         for chunk in l2:
             pid = chunk.metadata.get("parent_chunk_id")
-            assert pid in l1_hashes, (
-                f"L2 chunk parent_chunk_id={pid!r} not in L1 hashes"
-            )
+            assert pid in l1_hashes, f"L2 chunk parent_chunk_id={pid!r} not in L1 hashes"
 
     def test_table_l2_chunk_present(self, ingest_env, simple_pdf_bytes):
         """Fixture has a table element — an L2 chunk with element_type='table' must appear."""
@@ -177,8 +193,14 @@ class TestFullOdlIngestPipeline:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from ingest.policies import _build_chunks
+
                 chunks, _, _ = _build_chunks(
-                    path, "doc", "simple.pdf", "h", "v", ".pdf",
+                    path,
+                    "doc",
+                    "simple.pdf",
+                    "h",
+                    "v",
+                    ".pdf",
                 )
         finally:
             os.unlink(path)
@@ -187,14 +209,15 @@ class TestFullOdlIngestPipeline:
         assert table_chunks, "No L2 chunk with element_type='table' found in output"
         # Table content should have pricing information
         combined = " ".join(c.page_content for c in table_chunks)
-        assert any(kw in combined for kw in ("Starter", "Pro", "Enterprise", "$")), (
-            f"Table chunk content does not contain expected pricing data: {combined[:200]!r}"
-        )
+        assert any(
+            kw in combined for kw in ("Starter", "Pro", "Enterprise", "$")
+        ), f"Table chunk content does not contain expected pricing data: {combined[:200]!r}"
 
 
 # ---------------------------------------------------------------------------
 # 10.3  test_hierarchical_retrieval_e2e
 # ---------------------------------------------------------------------------
+
 
 class TestHierarchicalRetrievalE2E:
     def test_table_query_returns_table_chunk(self, vectorstore):
@@ -220,9 +243,7 @@ class TestHierarchicalRetrievalE2E:
         assert len(results) <= 3
         # The hierarchical heuristic should surface the table chunk
         element_types = [r.metadata.get("element_type") for r in results]
-        assert "table" in element_types, (
-            f"Expected 'table' element in top-3 for table query, got: {element_types}"
-        )
+        assert "table" in element_types, f"Expected 'table' element in top-3 for table query, got: {element_types}"
 
     def test_overview_query_returns_section_chunk(self, vectorstore):
         """An 'overview' query surfaces the L1 section chunk."""
@@ -243,9 +264,7 @@ class TestHierarchicalRetrievalE2E:
         results = hierarchical_retrieve(vectorstore, "overview of technical specifications", k=3, fetch_k=10)
 
         chunk_levels = [r.metadata.get("chunk_level") for r in results]
-        assert 1 in chunk_levels, (
-            f"Expected L1 section chunk in results for overview query, got levels: {chunk_levels}"
-        )
+        assert 1 in chunk_levels, f"Expected L1 section chunk in results for overview query, got levels: {chunk_levels}"
 
     def test_retrieval_result_has_section_metadata(self, vectorstore):
         """Retrieved L2 chunks carry section_title for citation rendering."""
@@ -267,14 +286,13 @@ class TestHierarchicalRetrievalE2E:
 
         l2_results = [r for r in results if r.metadata.get("chunk_level") == 2]
         for chunk in l2_results:
-            assert chunk.metadata.get("section_title") is not None, (
-                f"L2 chunk missing section_title: {chunk.metadata}"
-            )
+            assert chunk.metadata.get("section_title") is not None, f"L2 chunk missing section_title: {chunk.metadata}"
 
 
 # ---------------------------------------------------------------------------
 # 10.4  test_multipage_table_merged
 # ---------------------------------------------------------------------------
+
 
 class TestMultipageTableMerged:
     def test_two_page_table_chain_produces_one_element(self):
@@ -284,9 +302,7 @@ class TestMultipageTableMerged:
         merged_elements = merge_tables(raw_elements)
 
         tables = [e for e in merged_elements if e.element_type == "table"]
-        assert len(tables) == 1, (
-            f"Expected 1 merged table, got {len(tables)} tables in output"
-        )
+        assert len(tables) == 1, f"Expected 1 merged table, got {len(tables)} tables in output"
 
     def test_merged_table_spans_both_pages(self):
         """Merged table spans from page 3 to page 4."""
@@ -317,9 +333,7 @@ class TestMultipageTableMerged:
         l1_chunks, l2_chunks = build_hierarchical_chunks(merged)
 
         table_l2 = [c for c in l2_chunks if c.metadata.get("element_type") == "table"]
-        assert len(table_l2) == 1, (
-            f"Expected 1 table L2 chunk (merged), got {len(table_l2)}"
-        )
+        assert len(table_l2) == 1, f"Expected 1 table L2 chunk (merged), got {len(table_l2)}"
         # The L2 chunk should carry page_end from the merge
         assert table_l2[0].metadata.get("page_end") == 4
 
@@ -341,6 +355,7 @@ class TestMultipageTableMerged:
 # 10.7  Spot-check: non-PDF ingest paths unchanged
 # ---------------------------------------------------------------------------
 
+
 class TestNonPdfIngestUnchanged:
     def test_txt_ingest_produces_no_odl_metadata(self, ingest_env):
         """TXT files go through the legacy splitter — no chunk_level or element_type."""
@@ -356,7 +371,12 @@ class TestNonPdfIngestUnchanged:
 
         try:
             chunks, _, diag = _build_chunks(
-                path, "txt-doc", "doc.txt", "hash_txt", "v", ".txt",
+                path,
+                "txt-doc",
+                "doc.txt",
+                "hash_txt",
+                "v",
+                ".txt",
             )
         finally:
             os.unlink(path)
@@ -375,14 +395,18 @@ class TestNonPdfIngestUnchanged:
 
         with patch("ingest.policies.load_documents") as mock_load:
             mock_load.return_value = [
-                Document(page_content="DOCX content paragraph one.\n\nParagraph two.",
-                         metadata={"page": 0})
+                Document(page_content="DOCX content paragraph one.\n\nParagraph two.", metadata={"page": 0})
             ]
             with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:
                 path = f.name
             try:
                 chunks, _, diag = _build_chunks(
-                    path, "docx-doc", "doc.docx", "hash_docx", "v", ".docx",
+                    path,
+                    "docx-doc",
+                    "doc.docx",
+                    "hash_docx",
+                    "v",
+                    ".docx",
                 )
             finally:
                 os.unlink(path)
@@ -396,6 +420,7 @@ class TestNonPdfIngestUnchanged:
 # ---------------------------------------------------------------------------
 # 10.8  test_legacy_chunks_no_regression
 # ---------------------------------------------------------------------------
+
 
 class TestLegacyChunksNoRegression:
     """Mixed ODL + legacy chunks — _to_source() returns valid Source for all."""
@@ -472,8 +497,7 @@ class TestLegacyChunksNoRegression:
         assert len(sources) == 3
         for src in sources:
             # These keys must always be present
-            for key in ("label", "doc_id", "score", "page", "snippet",
-                        "section", "element_type", "page_end", "bbox"):
+            for key in ("label", "doc_id", "score", "page", "snippet", "section", "element_type", "page_end", "bbox"):
                 assert key in src, f"Key {key!r} missing from source dict"
 
     def test_dedup_works_with_mixed_chunks(self):

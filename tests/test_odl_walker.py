@@ -25,6 +25,7 @@ from ingest.pdf_opendataloader import (
 # Fixture JSON builders
 # ---------------------------------------------------------------------------
 
+
 def _heading(id_: int, text: str, level: int = 1, page: int = 1) -> dict:
     return {
         "type": "heading",
@@ -53,9 +54,17 @@ def _table(id_: int, rows: list[list[str]], page: int = 1, next_id=None, prev_id
         "page number": page,
         "bounding box": [0.0, 50.0, 100.0, 80.0],
         "rows": [
-            {"cells": [{"kids": [{"type": "paragraph", "content": cell, "id": 9000 + i * 10 + j, "page number": page}
-                                 for j, cell in enumerate(row_cells)]}
-                       for i, row_cells in enumerate(rows)]}
+            {
+                "cells": [
+                    {
+                        "kids": [
+                            {"type": "paragraph", "content": cell, "id": 9000 + i * 10 + j, "page number": page}
+                            for j, cell in enumerate(row_cells)
+                        ]
+                    }
+                    for i, row_cells in enumerate(rows)
+                ]
+            }
         ],
     }
     if next_id is not None:
@@ -72,6 +81,7 @@ def _doc(*kids) -> dict:
 # ---------------------------------------------------------------------------
 # 3.6  test_walker_heading_propagation
 # ---------------------------------------------------------------------------
+
 
 class TestWalkerHeadingPropagation:
     def test_h1_propagated_to_subsequent_paragraphs(self):
@@ -138,6 +148,7 @@ class TestWalkerHeadingPropagation:
 # 3.7  test_walker_table_extraction
 # ---------------------------------------------------------------------------
 
+
 class TestExtractContent:
     def test_table_two_rows_returns_cell_text(self):
         table = {
@@ -145,14 +156,18 @@ class TestExtractContent:
             "id": 1,
             "page number": 1,
             "rows": [
-                {"cells": [
-                    {"kids": [{"type": "paragraph", "content": "Name", "id": 10, "page number": 1}]},
-                    {"kids": [{"type": "paragraph", "content": "Value", "id": 11, "page number": 1}]},
-                ]},
-                {"cells": [
-                    {"kids": [{"type": "paragraph", "content": "Alice", "id": 12, "page number": 1}]},
-                    {"kids": [{"type": "paragraph", "content": "42", "id": 13, "page number": 1}]},
-                ]},
+                {
+                    "cells": [
+                        {"kids": [{"type": "paragraph", "content": "Name", "id": 10, "page number": 1}]},
+                        {"kids": [{"type": "paragraph", "content": "Value", "id": 11, "page number": 1}]},
+                    ]
+                },
+                {
+                    "cells": [
+                        {"kids": [{"type": "paragraph", "content": "Alice", "id": 12, "page number": 1}]},
+                        {"kids": [{"type": "paragraph", "content": "42", "id": 13, "page number": 1}]},
+                    ]
+                },
             ],
         }
         content = _extract_content(table)
@@ -216,6 +231,7 @@ class TestExtractContent:
 # 3.8  test_table_merge
 # ---------------------------------------------------------------------------
 
+
 class TestTableMerge:
     def test_two_linked_tables_merged_to_one(self):
         """Tables on pages 3 and 4 linked by next_table_id merge to one element."""
@@ -250,12 +266,11 @@ class TestTableMerge:
 
     def test_three_fragment_chain_merged_to_one(self):
         elements = [
-            OdlElement(id_=1, page_number=1, element_type="table", content="Part 1",
-                       next_table_id=2),
-            OdlElement(id_=2, page_number=2, element_type="table", content="Part 2",
-                       previous_table_id=1, next_table_id=3),
-            OdlElement(id_=3, page_number=3, element_type="table", content="Part 3",
-                       previous_table_id=2),
+            OdlElement(id_=1, page_number=1, element_type="table", content="Part 1", next_table_id=2),
+            OdlElement(
+                id_=2, page_number=2, element_type="table", content="Part 2", previous_table_id=1, next_table_id=3
+            ),
+            OdlElement(id_=3, page_number=3, element_type="table", content="Part 3", previous_table_id=2),
         ]
         result = merge_tables(elements)
         tables = [e for e in result if e.element_type == "table"]
@@ -267,10 +282,8 @@ class TestTableMerge:
 
     def test_page_end_is_last_fragment_page(self):
         elements = [
-            OdlElement(id_=5, page_number=7, element_type="table", content="A",
-                       next_table_id=6),
-            OdlElement(id_=6, page_number=9, element_type="table", content="B",
-                       previous_table_id=5),
+            OdlElement(id_=5, page_number=7, element_type="table", content="A", next_table_id=6),
+            OdlElement(id_=6, page_number=9, element_type="table", content="B", previous_table_id=5),
         ]
         result = merge_tables(elements)
         assert result[0].page_end == 9
@@ -280,17 +293,18 @@ class TestTableMerge:
 # 3.9  PBT: walk_tree never produces element with null element_type
 # ---------------------------------------------------------------------------
 
-_ODL_TYPES = ["heading", "paragraph", "table", "list", "image",
-              "caption", "header", "footer", "formula", "picture"]
+_ODL_TYPES = ["heading", "paragraph", "table", "list", "image", "caption", "header", "footer", "formula", "picture"]
 
-_flat_element_strategy = st.fixed_dictionaries({
-    "type": st.sampled_from(_ODL_TYPES),
-    "id": st.integers(min_value=0, max_value=9999),
-    "page number": st.integers(min_value=1, max_value=999),
-    "content": st.text(max_size=200),
-    "bounding box": st.just([0.0, 0.0, 100.0, 20.0]),
-    "heading level": st.one_of(st.none(), st.integers(min_value=1, max_value=6)),
-})
+_flat_element_strategy = st.fixed_dictionaries(
+    {
+        "type": st.sampled_from(_ODL_TYPES),
+        "id": st.integers(min_value=0, max_value=9999),
+        "page number": st.integers(min_value=1, max_value=999),
+        "content": st.text(max_size=200),
+        "bounding box": st.just([0.0, 0.0, 100.0, 20.0]),
+        "heading level": st.one_of(st.none(), st.integers(min_value=1, max_value=6)),
+    }
+)
 
 _flat_doc_strategy = st.builds(
     lambda kids: {"kids": kids},
@@ -311,20 +325,24 @@ def test_pbt_walk_tree_no_null_element_type(doc):
 # 3.10  PBT: section propagation invariant
 # ---------------------------------------------------------------------------
 
-_heading_strategy = st.fixed_dictionaries({
-    "type": st.just("heading"),
-    "id": st.integers(min_value=0, max_value=9999),
-    "page number": st.integers(min_value=1, max_value=999),
-    "content": st.text(min_size=1, max_size=100),
-    "heading level": st.integers(min_value=1, max_value=6),
-})
+_heading_strategy = st.fixed_dictionaries(
+    {
+        "type": st.just("heading"),
+        "id": st.integers(min_value=0, max_value=9999),
+        "page number": st.integers(min_value=1, max_value=999),
+        "content": st.text(min_size=1, max_size=100),
+        "heading level": st.integers(min_value=1, max_value=6),
+    }
+)
 
-_non_heading_strategy = st.fixed_dictionaries({
-    "type": st.sampled_from(["paragraph", "caption", "image"]),
-    "id": st.integers(min_value=0, max_value=9999),
-    "page number": st.integers(min_value=1, max_value=999),
-    "content": st.text(max_size=200),
-})
+_non_heading_strategy = st.fixed_dictionaries(
+    {
+        "type": st.sampled_from(["paragraph", "caption", "image"]),
+        "id": st.integers(min_value=0, max_value=9999),
+        "page number": st.integers(min_value=1, max_value=999),
+        "content": st.text(max_size=200),
+    }
+)
 
 _mixed_doc_strategy = st.builds(
     lambda kids: {"kids": kids},
@@ -346,14 +364,14 @@ def test_pbt_section_propagation_invariant(doc):
             current_heading_text = el.content
         else:
             assert el.section_title == current_heading_text, (
-                f"element {el.id_!r} has section_title={el.section_title!r}, "
-                f"expected {current_heading_text!r}"
+                f"element {el.id_!r} has section_title={el.section_title!r}, " f"expected {current_heading_text!r}"
             )
 
 
 # ---------------------------------------------------------------------------
 # 3.11  PBT: merge_tables count formula
 # ---------------------------------------------------------------------------
+
 
 @given(
     m_chains=st.integers(min_value=0, max_value=5),
@@ -374,23 +392,27 @@ def test_pbt_merge_tables_count_formula(m_chains, chain_len, n_independent):
             tid = id_counter
             next_id = id_counter + 1 if i < chain_len - 1 else None
             prev_id = id_counter - 1 if i > 0 else None
-            elements.append(OdlElement(
-                id_=tid,
-                page_number=i + 1,
-                element_type="table",
-                content=f"chain {c} fragment {i}",
-                next_table_id=next_id,
-                previous_table_id=prev_id,
-            ))
+            elements.append(
+                OdlElement(
+                    id_=tid,
+                    page_number=i + 1,
+                    element_type="table",
+                    content=f"chain {c} fragment {i}",
+                    next_table_id=next_id,
+                    previous_table_id=prev_id,
+                )
+            )
             id_counter += 1
 
     for _ in range(n_independent):
-        elements.append(OdlElement(
-            id_=id_counter,
-            page_number=1,
-            element_type="table",
-            content="independent",
-        ))
+        elements.append(
+            OdlElement(
+                id_=id_counter,
+                page_number=1,
+                element_type="table",
+                content="independent",
+            )
+        )
         id_counter += 1
 
     result = merge_tables(elements)
@@ -405,6 +427,7 @@ def test_pbt_merge_tables_count_formula(m_chains, chain_len, n_independent):
 # ---------------------------------------------------------------------------
 # 3.12  Security: malformed elements handled gracefully
 # ---------------------------------------------------------------------------
+
 
 class TestWalkerSecurity:
     def test_missing_kids_key_safe(self):

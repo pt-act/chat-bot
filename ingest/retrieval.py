@@ -95,12 +95,26 @@ def rerank(query: str, docs: list[Document], top_k: int) -> list[Document]:
 
 # Keyword sets for element-type heuristics.  Case-insensitive substring matching
 # only — no regex, no user-supplied patterns (no ReDoS surface).
-TABLE_QUERY_TERMS: frozenset[str] = frozenset({
-    "table", "row", "column", "compare", "vs", "versus", "list of",
-})
-OVERVIEW_QUERY_TERMS: frozenset[str] = frozenset({
-    "overview", "summary", "introduction", "what is", "about",
-})
+TABLE_QUERY_TERMS: frozenset[str] = frozenset(
+    {
+        "table",
+        "row",
+        "column",
+        "compare",
+        "vs",
+        "versus",
+        "list of",
+    }
+)
+OVERVIEW_QUERY_TERMS: frozenset[str] = frozenset(
+    {
+        "overview",
+        "summary",
+        "introduction",
+        "what is",
+        "about",
+    }
+)
 
 
 def hierarchical_retrieve(vs, query: str, k: int = 3, fetch_k: int = 10) -> list[Document]:
@@ -164,12 +178,7 @@ def hierarchical_retrieve(vs, query: str, k: int = 3, fetch_k: int = 10) -> list
         # Context expansion: when this is an L2 chunk whose parent is in the
         # candidate pool and hasn't been added yet, append it while room remains.
         parent_id = doc.metadata.get("parent_chunk_id")
-        if (
-            doc.metadata.get("chunk_level") == 2
-            and parent_id
-            and parent_id not in seen
-            and len(results) < k
-        ):
+        if doc.metadata.get("chunk_level") == 2 and parent_id and parent_id not in seen and len(results) < k:
             parent = by_hash.get(parent_id)
             if parent:
                 results.append(parent)
@@ -177,6 +186,10 @@ def hierarchical_retrieve(vs, query: str, k: int = 3, fetch_k: int = 10) -> list
 
     logger.info(
         "Hierarchical retrieve: %d candidates → %d results (k=%d, table=%s, overview=%s)",
-        len(candidates), len(results), k, is_table_query, is_overview_query,
+        len(candidates),
+        len(results),
+        k,
+        is_table_query,
+        is_overview_query,
     )
     return results[:k]

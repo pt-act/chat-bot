@@ -107,10 +107,17 @@ def _check_duplicate_content(redis_client, new_file_hash: str, doc_id: str) -> d
 
 # ODL-specific metadata fields to carry through the standard chunk-processing loop
 # (so L1/L2 hierarchy and citation metadata survive into the vector store).
-_ODL_PASSTHROUGH_KEYS = frozenset({
-    "chunk_level", "section_title", "element_type",
-    "parent_chunk_id", "heading_level", "bbox", "page_end",
-})
+_ODL_PASSTHROUGH_KEYS = frozenset(
+    {
+        "chunk_level",
+        "section_title",
+        "element_type",
+        "parent_chunk_id",
+        "heading_level",
+        "bbox",
+        "page_end",
+    }
+)
 
 
 def _build_chunks(
@@ -150,7 +157,8 @@ def _build_chunks(
 
     if use_odl:
         raw_chunks, odl_elements, diagnostics = load_pdf_odl(
-            file_path, settings,
+            file_path,
+            settings,
             pages=pages_override,
             hybrid_mode_override=hybrid_mode_override,
         )
@@ -311,7 +319,12 @@ def _run_ingest(
 
     version = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     new_chunks, new_hashes, diagnostics = _build_chunks(
-        file_path, doc_id, file_name, new_file_hash, version, ext,
+        file_path,
+        doc_id,
+        file_name,
+        new_file_hash,
+        version,
+        ext,
         parser_override=parser_override,
         hybrid_mode_override=hybrid_mode_override,
         pages_override=pages_override,
@@ -379,7 +392,11 @@ def process_policy(
         logger.info("Downloading %s (%s)", file_name, ext or "unknown format")
         file_path = _download_file(s3_url, ext)
         return _run_ingest(
-            redis_client, doc_id, file_name, file_path, ext,
+            redis_client,
+            doc_id,
+            file_name,
+            file_path,
+            ext,
             parser_override=parser_override,
             hybrid_mode_override=hybrid_mode_override,
             pages_override=pages_override,
@@ -414,7 +431,11 @@ def process_uploaded(
     try:
         logger.info("Processing uploaded document %s (%s)", file_name, ext)
         return _run_ingest(
-            redis_client, doc_id, file_name, file_path, ext,
+            redis_client,
+            doc_id,
+            file_name,
+            file_path,
+            ext,
             parser_override=parser_override,
             hybrid_mode_override=hybrid_mode_override,
             pages_override=pages_override,

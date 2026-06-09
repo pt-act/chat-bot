@@ -31,6 +31,7 @@ from ingest.pdf_opendataloader import (
 # 8.1  _extract_content handles formula and picture (sanity checks)
 # ---------------------------------------------------------------------------
 
+
 class TestExtractContentEnrichment:
     def test_formula_returns_latex_content(self):
         el = {"type": "formula", "id": 1, "content": r"\int_{0}^{\infty} e^{-x^2} dx = \frac{\sqrt{\pi}}{2}"}
@@ -63,14 +64,14 @@ class TestExtractContentEnrichment:
 # 8.4  test_formula_chunk_stored
 # ---------------------------------------------------------------------------
 
+
 class TestFormulaChunkStored:
     def _formula_elements(self):
         return [
-            OdlElement(id_=1, page_number=1, element_type="heading",
-                       content="Equations", heading_level=1),
-            OdlElement(id_=2, page_number=1, element_type="formula",
-                       content=r"\frac{a}{b} = c",
-                       section_title="Equations"),
+            OdlElement(id_=1, page_number=1, element_type="heading", content="Equations", heading_level=1),
+            OdlElement(
+                id_=2, page_number=1, element_type="formula", content=r"\frac{a}{b} = c", section_title="Equations"
+            ),
         ]
 
     def test_formula_l2_chunk_element_type(self):
@@ -103,11 +104,14 @@ class TestFormulaChunkStored:
     def test_picture_l2_chunk_element_type(self):
         """Picture element produces an L2 chunk with element_type='picture'."""
         elements = [
-            OdlElement(id_=1, page_number=1, element_type="heading",
-                       content="Figures", heading_level=1),
-            OdlElement(id_=2, page_number=1, element_type="picture",
-                       content="A scatter plot showing temperature vs. pressure",
-                       section_title="Figures"),
+            OdlElement(id_=1, page_number=1, element_type="heading", content="Figures", heading_level=1),
+            OdlElement(
+                id_=2,
+                page_number=1,
+                element_type="picture",
+                content="A scatter plot showing temperature vs. pressure",
+                section_title="Figures",
+            ),
         ]
         _, l2 = build_hierarchical_chunks(elements)
         picture_chunks = [c for c in l2 if c.metadata.get("element_type") == "picture"]
@@ -187,12 +191,14 @@ class TestFormulaChunkStored:
 # 8.5  test_enrichment_requires_full_mode
 # ---------------------------------------------------------------------------
 
+
 class TestEnrichmentRequiresFullMode:
     def test_enrich_formula_auto_mode_raises(self):
         """ODL_ENRICH_FORMULA=true requires ODL_HYBRID_MODE=full."""
         from pydantic import ValidationError
 
         from config import Settings
+
         with pytest.raises((ValidationError, ValueError), match="ODL_ENRICH_FORMULA"):
             Settings(odl_enrich_formula=True, odl_hybrid_mode="auto")
 
@@ -201,16 +207,19 @@ class TestEnrichmentRequiresFullMode:
         from pydantic import ValidationError
 
         from config import Settings
+
         with pytest.raises((ValidationError, ValueError), match="ODL_ENRICH_PICTURES"):
             Settings(odl_enrich_pictures=True, odl_hybrid_mode="auto")
 
     def test_enrich_formula_full_mode_ok(self):
         from config import Settings
+
         s = Settings(odl_enrich_formula=True, odl_hybrid_mode="full")
         assert s.odl_enrich_formula is True
 
     def test_enrich_pictures_full_mode_ok(self):
         from config import Settings
+
         s = Settings(odl_enrich_pictures=True, odl_hybrid_mode="full")
         assert s.odl_enrich_pictures is True
 
@@ -236,6 +245,7 @@ class TestEnrichmentRequiresFullMode:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 s = Settings(
                     odl_hybrid="docling-fast",
                     odl_hybrid_url="http://odl-hybrid:5002",
@@ -249,9 +259,7 @@ class TestEnrichmentRequiresFullMode:
             os.unlink(path)
 
         called_kwargs = mock_odl.convert.call_args[1]
-        assert called_kwargs.get("enrich_formula") is True, (
-            f"enrich_formula not passed to convert(): {called_kwargs}"
-        )
+        assert called_kwargs.get("enrich_formula") is True, f"enrich_formula not passed to convert(): {called_kwargs}"
 
     def test_enrich_pictures_passed_to_convert_when_hybrid_active(self, pdf_v1_bytes):
         """ODL_ENRICH_PICTURES=true is passed as enrich_pictures=True to convert()."""
@@ -275,6 +283,7 @@ class TestEnrichmentRequiresFullMode:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 s = Settings(
                     odl_hybrid="docling-fast",
                     odl_hybrid_url="http://odl-hybrid:5002",
@@ -311,6 +320,7 @@ class TestEnrichmentRequiresFullMode:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 # No hybrid configured — enrichment flags must not appear
                 s = Settings()
                 load_pdf_odl(path, settings=s)
@@ -328,6 +338,7 @@ class TestEnrichmentRequiresFullMode:
 # 8.6  Security: formula content is plain text, no execution path
 # ---------------------------------------------------------------------------
 
+
 class TestFormulaContentSecurity:
     def test_formula_snippet_is_plain_text(self):
         """_to_source() returns formula LaTeX as plain text snippet, not executed."""
@@ -342,9 +353,9 @@ class TestFormulaContentSecurity:
             },
         )
         source = _to_source(doc)
-        assert source["snippet"] == latex, (
-            f"Formula content should appear verbatim in snippet, got: {source['snippet']!r}"
-        )
+        assert (
+            source["snippet"] == latex
+        ), f"Formula content should appear verbatim in snippet, got: {source['snippet']!r}"
         assert source["element_type"] == "formula"
 
     def test_formula_content_not_html_in_source(self):
@@ -364,14 +375,12 @@ class TestFormulaContentSecurity:
     def test_formula_stored_as_text_not_executed(self):
         """Formula content containing Python-eval-like strings is stored verbatim."""
         dangerous = "__import__('os').system('echo pwned')"
-        el = OdlElement(id_=1, page_number=1, element_type="formula",
-                        content=dangerous)
+        el = OdlElement(id_=1, page_number=1, element_type="formula", content=dangerous)
         # _extract_content returns it as a plain string
         result = _extract_content({"type": "formula", "content": dangerous})
         assert result == dangerous
         # build_hierarchical_chunks stores it as plain page_content
-        heading = OdlElement(id_=0, page_number=1, element_type="heading",
-                             content="H1", heading_level=1)
+        heading = OdlElement(id_=0, page_number=1, element_type="heading", content="H1", heading_level=1)
         el.section_title = "H1"
         _, l2 = build_hierarchical_chunks([heading, el])
         if l2:
@@ -381,10 +390,8 @@ class TestFormulaContentSecurity:
         """Formula text flows into L1 section content as plain text, not rendered."""
         latex = r"E = mc^2"
         elements = [
-            OdlElement(id_=1, page_number=1, element_type="heading",
-                       content="Physics", heading_level=1),
-            OdlElement(id_=2, page_number=1, element_type="formula",
-                       content=latex, section_title="Physics"),
+            OdlElement(id_=1, page_number=1, element_type="heading", content="Physics", heading_level=1),
+            OdlElement(id_=2, page_number=1, element_type="formula", content=latex, section_title="Physics"),
         ]
         l1, _ = build_hierarchical_chunks(elements)
         assert l1
@@ -402,19 +409,24 @@ class TestFormulaContentSecurity:
     def test_enrichment_does_not_create_execution_surface(self):
         """Enrichment chunks carry no metadata that could be misused as code."""
         elements = [
-            OdlElement(id_=1, page_number=1, element_type="heading",
-                       content="Results", heading_level=1),
-            OdlElement(id_=2, page_number=1, element_type="formula",
-                       content=r"\alpha + \beta = \gamma",
-                       section_title="Results"),
-            OdlElement(id_=3, page_number=1, element_type="picture",
-                       content="A graph showing alpha and beta values",
-                       section_title="Results"),
+            OdlElement(id_=1, page_number=1, element_type="heading", content="Results", heading_level=1),
+            OdlElement(
+                id_=2,
+                page_number=1,
+                element_type="formula",
+                content=r"\alpha + \beta = \gamma",
+                section_title="Results",
+            ),
+            OdlElement(
+                id_=3,
+                page_number=1,
+                element_type="picture",
+                content="A graph showing alpha and beta values",
+                section_title="Results",
+            ),
         ]
         l1, l2 = build_hierarchical_chunks(elements)
         # Verify all chunks have plain string metadata values (no callables)
         for chunk in l1 + l2:
             for key, val in chunk.metadata.items():
-                assert not callable(val), (
-                    f"Chunk metadata[{key!r}] is callable — potential execution surface"
-                )
+                assert not callable(val), f"Chunk metadata[{key!r}] is callable — potential execution surface"

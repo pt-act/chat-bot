@@ -26,6 +26,7 @@ _EVAL_RESULTS = Path(__file__).parent.parent / "eval" / "results"
 # Inline eval logic (mirrors eval/pdf_comparison.py)
 # ---------------------------------------------------------------------------
 
+
 def _run_odl_markdown(md_content: str) -> list[Document]:
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800, chunk_overlap=100, separators=["\n\n", "\n", ".", " ", ""]
@@ -55,12 +56,8 @@ def _compute_metrics(chunks: list[Document], strategy: str) -> dict:
         "strategy": strategy,
         "chunk_count": n,
         "table_content_quality": round(sum("|" in c.page_content for c in chunks) / n, 4),
-        "section_metadata_coverage": round(
-            sum(bool(c.metadata.get("section_title")) for c in chunks) / n, 4
-        ),
-        "table_element_present": 1.0 if any(
-            c.metadata.get("element_type") == "table" for c in chunks
-        ) else 0.0,
+        "section_metadata_coverage": round(sum(bool(c.metadata.get("section_title")) for c in chunks) / n, 4),
+        "table_element_present": 1.0 if any(c.metadata.get("element_type") == "table" for c in chunks) else 0.0,
     }
 
 
@@ -89,6 +86,7 @@ def _run_eval() -> dict:
 # ---------------------------------------------------------------------------
 # 10.5  eval harness produces metrics for all three strategies
 # ---------------------------------------------------------------------------
+
 
 class TestEvalHarness:
     def test_all_three_strategies_produce_results(self):
@@ -157,13 +155,13 @@ class TestEvalHarness:
 # 10.6  at least one ODL metric improves over PyPDF baseline
 # ---------------------------------------------------------------------------
 
+
 class TestEvalGate:
     def test_gate_passes(self):
         """10.6: gate_passed=True — at least one ODL metric beats the PyPDF baseline."""
         summary = _run_eval()
-        assert summary["gate_passed"] is True, (
-            "Eval gate failed. Results:\n"
-            + "\n".join(f"  {r}" for r in summary["results"])
+        assert summary["gate_passed"] is True, "Eval gate failed. Results:\n" + "\n".join(
+            f"  {r}" for r in summary["results"]
         )
 
     def test_odl_markdown_improves_table_quality(self):
@@ -171,32 +169,31 @@ class TestEvalGate:
         fixture_md = (_FIXTURES / "simple_mock.md").read_text(encoding="utf-8")
         chunks = _run_odl_markdown(fixture_md)
         metrics = _compute_metrics(chunks, "odl_markdown")
-        assert metrics["table_content_quality"] > 0.0, (
-            "ODL-Markdown should produce chunks with Markdown table syntax"
-        )
+        assert metrics["table_content_quality"] > 0.0, "ODL-Markdown should produce chunks with Markdown table syntax"
 
     def test_odl_hierarchical_has_section_metadata(self):
         """ODL-Hierarchical section_metadata_coverage > 0 (L2 chunks carry section_title)."""
         fixture_json = _json.loads((_FIXTURES / "simple_mock.json").read_text(encoding="utf-8"))
         chunks = _run_odl_hierarchical(fixture_json)
         metrics = _compute_metrics(chunks, "odl_hierarchical")
-        assert metrics["section_metadata_coverage"] > 0.0, (
-            "ODL-Hierarchical should produce chunks with section_title metadata"
-        )
+        assert (
+            metrics["section_metadata_coverage"] > 0.0
+        ), "ODL-Hierarchical should produce chunks with section_title metadata"
 
     def test_odl_hierarchical_has_table_element(self):
         """ODL-Hierarchical table_element_present=1.0 (fixture has a table element)."""
         fixture_json = _json.loads((_FIXTURES / "simple_mock.json").read_text(encoding="utf-8"))
         chunks = _run_odl_hierarchical(fixture_json)
         metrics = _compute_metrics(chunks, "odl_hierarchical")
-        assert metrics["table_element_present"] == 1.0, (
-            "ODL-Hierarchical should contain a chunk with element_type='table'"
-        )
+        assert (
+            metrics["table_element_present"] == 1.0
+        ), "ODL-Hierarchical should contain a chunk with element_type='table'"
 
 
 # ---------------------------------------------------------------------------
 # 10.10  CI uses mocked ODL JSON; no hybrid server required
 # ---------------------------------------------------------------------------
+
 
 class TestCiSafety:
     def test_scanned_mock_json_processes_without_hybrid(self):

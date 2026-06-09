@@ -199,9 +199,7 @@ class Settings(BaseSettings):
         valid = {"mmr", "hybrid", "hybrid_rerank", "hierarchical"}
         if self.retrieval_strategy not in valid:
             allowed = ", ".join(f"'{s}'" for s in sorted(valid))
-            raise ValueError(
-                f"RETRIEVAL_STRATEGY must be one of {allowed} — got '{self.retrieval_strategy}'"
-            )
+            raise ValueError(f"RETRIEVAL_STRATEGY must be one of {allowed} — got '{self.retrieval_strategy}'")
         return self
 
     @model_validator(mode="after")

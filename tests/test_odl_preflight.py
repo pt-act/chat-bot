@@ -102,23 +102,31 @@ class TestConfigPdfParser:
 
 
 class TestParseJavaVersionPBT:
-    @given(st.sampled_from([
-        "openjdk version \"11.0.21\" 2023-10-17",
-        "java version \"11.0.1\"",
-        "openjdk version \"17.0.1\" 2021-10-19",
-        "java version \"17\"",
-        "openjdk version \"21.0.2\" 2024-01-16",
-    ]))
+    @given(
+        st.sampled_from(
+            [
+                'openjdk version "11.0.21" 2023-10-17',
+                'java version "11.0.1"',
+                'openjdk version "17.0.1" 2021-10-19',
+                'java version "17"',
+                'openjdk version "21.0.2" 2024-01-16',
+            ]
+        )
+    )
     def test_modern_versions_parsed(self, text):
         major = _parse_java_version(text)
         assert major is not None
         assert major >= 11
 
-    @given(st.sampled_from([
-        'java version "1.8.0_202"',
-        'openjdk version "1.7.0_80"',
-        'java version "1.6.0_45"',
-    ]))
+    @given(
+        st.sampled_from(
+            [
+                'java version "1.8.0_202"',
+                'openjdk version "1.7.0_80"',
+                'java version "1.6.0_45"',
+            ]
+        )
+    )
     def test_legacy_versions_parsed(self, text):
         major = _parse_java_version(text)
         assert major is not None

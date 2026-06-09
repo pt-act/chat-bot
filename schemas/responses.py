@@ -22,9 +22,7 @@ class Source(BaseModel):
     element_type: str | None = Field(
         default=None, examples=["table"], description="ODL element type (paragraph, table, list, …)"
     )
-    page_end: int | None = Field(
-        default=None, examples=[4], description="Last page for multi-page elements"
-    )
+    page_end: int | None = Field(default=None, examples=[4], description="Last page for multi-page elements")
     bbox: list[float] | None = Field(
         default=None, examples=[[72.0, 680.0, 540.0, 740.0]], description="[left, bottom, right, top] in PDF points"
     )

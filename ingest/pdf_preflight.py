@@ -95,9 +95,7 @@ def _hybrid_reachable(url: str | None) -> tuple[bool, str]:
     # FR 7.9: Validate scheme before any network call.
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        return False, (
-            f"ODL_HYBRID_URL must use http:// or https:// — got scheme {parsed.scheme!r}"
-        )
+        return False, (f"ODL_HYBRID_URL must use http:// or https:// — got scheme {parsed.scheme!r}")
     # Reject credentials in the netloc (e.g. user@host style SSRF pivot attempts).
     if "@" in (parsed.netloc or ""):
         return False, f"ODL_HYBRID_URL must not contain credentials: {url!r}"

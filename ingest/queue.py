@@ -69,7 +69,8 @@ def _run_job(redis, job: dict) -> dict:
     if job["kind"] == "url":
         # process_policy re-downloads each attempt and handles its own temp cleanup + SSRF.
         return process_policy(
-            doc_id, job["s3_url"],
+            doc_id,
+            job["s3_url"],
             parser_override=parser,
             hybrid_mode_override=hybrid_mode,
             pages_override=pages,
@@ -77,7 +78,11 @@ def _run_job(redis, job: dict) -> dict:
     # Upload: run the shared core directly so the staged file survives transient retries
     # (process_uploaded would delete it). The queue layer owns the file's lifecycle.
     return _run_ingest(
-        redis, doc_id, doc_id, job["file_path"], job["ext"],
+        redis,
+        doc_id,
+        doc_id,
+        job["file_path"],
+        job["ext"],
         parser_override=parser,
         hybrid_mode_override=hybrid_mode,
         pages_override=pages,

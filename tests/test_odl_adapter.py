@@ -20,6 +20,7 @@ from hypothesis import strategies as st
 # Helpers / shared mocks
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_odl(md_content: str = "# Heading\n\nParagraph | table cell\n"):
     """Return a mock opendataloader_pdf module whose convert() writes a .md file."""
 
@@ -35,6 +36,7 @@ def _make_mock_odl(md_content: str = "# Heading\n\nParagraph | table cell\n"):
 # ---------------------------------------------------------------------------
 # 2.5  test_track1_e2e — skipped when opendataloader_pdf is not installed
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(
     True,  # requires real Java + ODL install; enable manually in local/CI env with ODL
@@ -62,6 +64,7 @@ def test_track1_e2e(pdf_v1_bytes):
 # 2.6  test_fallback_on_odl_failure
 # ---------------------------------------------------------------------------
 
+
 class TestFallbackOnOdlFailure:
     def test_fallback_enabled_returns_pypdf_docs(self, pdf_v1_bytes):
         from ingest.pdf_opendataloader import load_pdf_odl
@@ -79,6 +82,7 @@ class TestFallbackOnOdlFailure:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 s = Settings(pdf_parser_fallback=True)
                 docs, _, diag = load_pdf_odl(path, settings=s)
         finally:
@@ -107,6 +111,7 @@ class TestFallbackOnOdlFailure:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 s = Settings(pdf_parser_fallback=False)
                 with pytest.raises(RuntimeError):
                     load_pdf_odl(path, settings=s)
@@ -117,6 +122,7 @@ class TestFallbackOnOdlFailure:
 # ---------------------------------------------------------------------------
 # 2.8  test_temp_dir_cleaned_on_success
 # ---------------------------------------------------------------------------
+
 
 class TestTempDirCleanup:
     def _capture_tmp_dir(self) -> list[str]:
@@ -190,6 +196,7 @@ class TestTempDirCleanup:
                 patch("ingest.pdf_opendataloader.tempfile.mkdtemp", side_effect=spy_mkdtemp),
             ):
                 from config import Settings
+
                 s = Settings(pdf_parser_fallback=False)
                 with pytest.raises(RuntimeError):
                     load_pdf_odl(path, settings=s)
@@ -204,6 +211,7 @@ class TestTempDirCleanup:
 # ---------------------------------------------------------------------------
 # 2.10  PBT: temp-dir cleanup invariant
 # ---------------------------------------------------------------------------
+
 
 @given(should_fail=st.booleans())
 def test_pbt_temp_dir_always_cleaned(should_fail, pdf_v1_bytes):
@@ -235,6 +243,7 @@ def test_pbt_temp_dir_always_cleaned(should_fail, pdf_v1_bytes):
             patch("ingest.pdf_opendataloader.tempfile.mkdtemp", side_effect=spy_mkdtemp),
         ):
             from config import Settings
+
             try:
                 load_pdf_odl(path, settings=Settings(pdf_parser_fallback=False))
             except RuntimeError:
@@ -249,6 +258,7 @@ def test_pbt_temp_dir_always_cleaned(should_fail, pdf_v1_bytes):
 # ---------------------------------------------------------------------------
 # 2.11  PBT: fallback invariant
 # ---------------------------------------------------------------------------
+
 
 @given(odl_should_fail=st.booleans(), fallback_enabled=st.booleans())
 def test_pbt_fallback_invariant(odl_should_fail, fallback_enabled, pdf_v1_bytes):
@@ -271,6 +281,7 @@ def test_pbt_fallback_invariant(odl_should_fail, fallback_enabled, pdf_v1_bytes)
             patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
         ):
             from config import Settings
+
             s = Settings(pdf_parser_fallback=fallback_enabled)
             if odl_should_fail and not fallback_enabled:
                 with pytest.raises(RuntimeError):
@@ -297,6 +308,7 @@ def test_pbt_fallback_invariant(odl_should_fail, fallback_enabled, pdf_v1_bytes)
 # ---------------------------------------------------------------------------
 # 2.12  Security: output_dir never under INGEST_INCOMING_DIR
 # ---------------------------------------------------------------------------
+
 
 class TestSecurity:
     def test_output_dir_under_tempdir(self, pdf_v1_bytes):
@@ -331,9 +343,7 @@ class TestSecurity:
         real_tmp = os.path.realpath(tempfile.gettempdir())
         for d in captured_output_dirs:
             real_d = os.path.realpath(d)
-            assert real_d.startswith(real_tmp), (
-                f"output_dir {d!r} is not under tempdir {real_tmp!r}"
-            )
+            assert real_d.startswith(real_tmp), f"output_dir {d!r} is not under tempdir {real_tmp!r}"
 
     def test_error_message_does_not_leak_output_dir(self, pdf_v1_bytes):
         """FR 2.14: error from ODL exceptions does not expose output_dir path in RuntimeError."""
@@ -352,6 +362,7 @@ class TestSecurity:
                 patch.dict(sys.modules, {"opendataloader_pdf": mock_odl}),
             ):
                 from config import Settings
+
                 s = Settings(pdf_parser_fallback=False)
                 with pytest.raises(RuntimeError) as exc_info:
                     load_pdf_odl(path, settings=s)

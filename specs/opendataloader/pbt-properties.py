@@ -28,6 +28,7 @@ from hypothesis import strategies as st
 # once implementation exists)
 # ---------------------------------------------------------------------------
 
+
 # Stub: ODL JSON field mapper
 def map_odl_element(raw: dict) -> dict:
     """Maps ODL space-separated keys to snake_case attributes."""
@@ -45,30 +46,32 @@ def map_odl_element(raw: dict) -> dict:
 # Strategies
 # ---------------------------------------------------------------------------
 
-odl_element_types = st.sampled_from([
-    "heading", "paragraph", "table", "list", "image",
-    "caption", "header", "footer", "formula", "picture"
-])
+odl_element_types = st.sampled_from(
+    ["heading", "paragraph", "table", "list", "image", "caption", "header", "footer", "formula", "picture"]
+)
 
 bounding_box = st.lists(
     st.floats(min_value=0, max_value=1000, allow_nan=False, allow_infinity=False),
-    min_size=4, max_size=4,
+    min_size=4,
+    max_size=4,
 )
 
-odl_raw_element = st.fixed_dictionaries({
-    "type": odl_element_types,
-    "id": st.integers(min_value=0, max_value=99999),
-    "page number": st.integers(min_value=1, max_value=9999),
-    "bounding box": bounding_box,
-    "heading level": st.one_of(st.none(), st.integers(min_value=1, max_value=6)),
-    "content": st.text(max_size=2000),
-})
+odl_raw_element = st.fixed_dictionaries(
+    {
+        "type": odl_element_types,
+        "id": st.integers(min_value=0, max_value=99999),
+        "page number": st.integers(min_value=1, max_value=9999),
+        "bounding box": bounding_box,
+        "heading level": st.one_of(st.none(), st.integers(min_value=1, max_value=6)),
+        "content": st.text(max_size=2000),
+    }
+)
 
 java_version_string = st.one_of(
     st.just("openjdk 11.0.21 2023-10-17"),
     st.just("openjdk 17.0.9 2023-10-17"),
-    st.just("java version \"1.8.0_202\""),
-    st.just("java version \"11.0.2\" 2019-01-15 LTS"),
+    st.just('java version "1.8.0_202"'),
+    st.just('java version "11.0.2" 2019-01-15 LTS'),
     st.just("openjdk 21.0.1 2023-10-17"),
     st.builds(
         lambda major, minor, patch_v: f"openjdk {major}.{minor}.{patch_v} 2024-01-01",
@@ -83,6 +86,7 @@ java_version_string = st.one_of(
 # Group 1 — Java Version Parsing
 # ---------------------------------------------------------------------------
 
+
 def parse_java_major_version(version_str: str) -> int | None:
     """Extract major version number from java -version output."""
     match = re.search(r'"?(\d+)\.(\d+)', version_str)
@@ -92,7 +96,7 @@ def parse_java_major_version(version_str: str) -> int | None:
         if major == 1:
             return minor
         return major
-    match = re.search(r'(\d+)\.\d+\.\d+', version_str)
+    match = re.search(r"(\d+)\.\d+\.\d+", version_str)
     if match:
         major = int(match.group(1))
         return major
@@ -124,6 +128,7 @@ def test_pbt_java_version_11_recognized(version_str):
 # ---------------------------------------------------------------------------
 # Group 2 — JSON Field Mapper
 # ---------------------------------------------------------------------------
+
 
 @given(raw=odl_raw_element)
 def test_pbt_field_mapper_no_missing_keys(raw):
@@ -166,14 +171,23 @@ def test_pbt_field_mapper_element_type_never_null(raw):
     mapped = map_odl_element(raw)
     assert mapped["element_type"] is not None
     assert mapped["element_type"] in {
-        "heading", "paragraph", "table", "list", "image",
-        "caption", "header", "footer", "formula", "picture"
+        "heading",
+        "paragraph",
+        "table",
+        "list",
+        "image",
+        "caption",
+        "header",
+        "footer",
+        "formula",
+        "picture",
     }
 
 
 # ---------------------------------------------------------------------------
 # Group 3 — Section Title Propagation
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class MockElement:
@@ -249,6 +263,7 @@ def test_pbt_section_propagation_heading_count_unchanged(elements):
 # ---------------------------------------------------------------------------
 # Group 3 — Multi-Page Table Merger
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class MockTable:
@@ -328,8 +343,7 @@ def test_pbt_table_merger_all_ids_represented(tables):
     assert len(result) == len(input_ids)
 
 
-@given(n_fragments=st.integers(min_value=2, max_value=5),
-       start_page=st.integers(min_value=1, max_value=100))
+@given(n_fragments=st.integers(min_value=2, max_value=5), start_page=st.integers(min_value=1, max_value=100))
 def test_pbt_table_merger_chain_reduces_count(n_fragments, start_page):
     """
     Property: a chain of N linked table fragments is reduced to 1 merged element.
@@ -352,6 +366,7 @@ def test_pbt_table_merger_chain_reduces_count(n_fragments, start_page):
 # Group 2 — Temp Directory Cleanup
 # ---------------------------------------------------------------------------
 
+
 def simulate_odl_convert_with_cleanup(should_fail: bool) -> dict | None:
     """
     Simulates the ODL adapter's convert+cleanup pattern.
@@ -365,6 +380,7 @@ def simulate_odl_convert_with_cleanup(should_fail: bool) -> dict | None:
         return {"parser": "opendataloader", "tmp_was": tmp_dir}
     finally:
         import shutil
+
         if os.path.exists(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -384,28 +400,24 @@ def test_pbt_temp_dir_always_cleaned_up(should_fail):
         pass
 
     if tmp_dir_path:
-        assert not os.path.exists(tmp_dir_path), (
-            f"Temp dir still exists after convert: {tmp_dir_path}"
-        )
+        assert not os.path.exists(tmp_dir_path), f"Temp dir still exists after convert: {tmp_dir_path}"
 
 
 # ---------------------------------------------------------------------------
 # Group 2 — Fallback Invariant
 # ---------------------------------------------------------------------------
 
-def simulate_load_pdf_odl(file_path: str, fallback_enabled: bool,
-                           odl_should_fail: bool) -> list:
+
+def simulate_load_pdf_odl(file_path: str, fallback_enabled: bool, odl_should_fail: bool) -> list:
     """
     Simulates load_pdf_odl() behavior for property testing.
     Returns list of mock Document-like dicts.
     """
     if odl_should_fail:
         if fallback_enabled:
-            return [{"page_content": "fallback content", "metadata": {"parser": "pypdf",
-                                                                        "fallback_used": True}}]
+            return [{"page_content": "fallback content", "metadata": {"parser": "pypdf", "fallback_used": True}}]
         raise RuntimeError("ODL failed and fallback is disabled")
-    return [{"page_content": "odl content | table", "metadata": {"parser": "opendataloader",
-                                                                    "fallback_used": False}}]
+    return [{"page_content": "odl content | table", "metadata": {"parser": "opendataloader", "fallback_used": False}}]
 
 
 @given(
@@ -441,6 +453,7 @@ def test_pbt_fallback_invariant(fallback_enabled, odl_should_fail, file_path):
 # Group 4 — Hierarchical Parent Link (Referential Integrity)
 # ---------------------------------------------------------------------------
 
+
 @given(
     section_count=st.integers(min_value=1, max_value=10),
     elements_per_section=st.integers(min_value=1, max_value=5),
@@ -461,35 +474,39 @@ def test_pbt_l2_parent_chunk_id_always_resolvable(section_count, elements_per_se
     for i in range(section_count):
         section_text = f"# Section {i}\nContent of section {i}"
         l1_hash = make_chunk_hash(section_text)
-        l1_chunks.append({
-            "page_content": section_text,
-            "metadata": {
-                "chunk_level": 1,
-                "chunk_hash": l1_hash,
-                "section_title": f"Section {i}",
+        l1_chunks.append(
+            {
+                "page_content": section_text,
+                "metadata": {
+                    "chunk_level": 1,
+                    "chunk_hash": l1_hash,
+                    "section_title": f"Section {i}",
+                },
             }
-        })
+        )
         for j in range(elements_per_section):
             element_text = f"Paragraph {j} in section {i}"
             l2_hash = make_chunk_hash(element_text)
-            l2_chunks.append({
-                "page_content": element_text,
-                "metadata": {
-                    "chunk_level": 2,
-                    "chunk_hash": l2_hash,
-                    "parent_chunk_id": l1_hash,
-                    "section_title": f"Section {i}",
-                    "element_type": "paragraph",
+            l2_chunks.append(
+                {
+                    "page_content": element_text,
+                    "metadata": {
+                        "chunk_level": 2,
+                        "chunk_hash": l2_hash,
+                        "parent_chunk_id": l1_hash,
+                        "section_title": f"Section {i}",
+                        "element_type": "paragraph",
+                    },
                 }
-            })
+            )
 
     l1_hashes = {c["metadata"]["chunk_hash"] for c in l1_chunks}
 
     for l2 in l2_chunks:
         parent_id = l2["metadata"]["parent_chunk_id"]
-        assert parent_id in l1_hashes, (
-            f"L2 chunk references parent_chunk_id={parent_id!r} which has no matching L1 chunk"
-        )
+        assert (
+            parent_id in l1_hashes
+        ), f"L2 chunk references parent_chunk_id={parent_id!r} which has no matching L1 chunk"
 
 
 # ---------------------------------------------------------------------------
@@ -497,23 +514,17 @@ def test_pbt_l2_parent_chunk_id_always_resolvable(section_count, elements_per_se
 # ---------------------------------------------------------------------------
 
 valid_parser_values = st.sampled_from(["pypdf", "opendataloader", None])
-invalid_parser_values = st.text(min_size=1).filter(
-    lambda s: s not in {"pypdf", "opendataloader"}
-)
+invalid_parser_values = st.text(min_size=1).filter(lambda s: s not in {"pypdf", "opendataloader"})
 
-valid_pages_pattern = re.compile(r'^\d+(-\d+)?(,\d+(-\d+)?)*$')
+valid_pages_pattern = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 
 page_range_valid = st.builds(
-    lambda pages: ",".join(
-        f"{p}-{p+n}" if n > 0 else str(p)
-        for p, n in pages
-    ),
+    lambda pages: ",".join(f"{p}-{p+n}" if n > 0 else str(p) for p, n in pages),
     pages=st.lists(
-        st.tuples(st.integers(min_value=1, max_value=500),
-                  st.integers(min_value=0, max_value=5)),
+        st.tuples(st.integers(min_value=1, max_value=500), st.integers(min_value=0, max_value=5)),
         min_size=1,
         max_size=5,
-    )
+    ),
 )
 
 page_range_invalid = st.one_of(

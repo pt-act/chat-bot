@@ -123,8 +123,12 @@ def _make_simple_pdf_bytes() -> bytes:
     pdf.cell(0, 10, "Pricing Table", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", size=10)
     # Render table rows as sequential cells so PyPDF extracts some text
-    for row in [("Plan", "Price", "Users"), ("Starter", "$9/mo", "5"),
-                ("Pro", "$29/mo", "25"), ("Enterprise", "$99/mo", "Unlimited")]:
+    for row in [
+        ("Plan", "Price", "Users"),
+        ("Starter", "$9/mo", "5"),
+        ("Pro", "$29/mo", "25"),
+        ("Enterprise", "$99/mo", "Unlimited"),
+    ]:
         for cell_text in row:
             pdf.cell(60, 7, cell_text, border=1)
         pdf.ln()
@@ -147,8 +151,7 @@ def _make_multipage_table_pdf_bytes() -> bytes:
     pdf.ln(4)
     # Push table to span across pages by filling first page with rows
     pdf.set_font("Helvetica", size=10)
-    for region in ["North", "South", "Midwest", "Southeast", "Southwest",
-                   "Northwest", "Central", "Northeast"]:
+    for region in ["North", "South", "Midwest", "Southeast", "Southwest", "Northwest", "Central", "Northeast"]:
         for cell_text in (region, "$1.2M", "$1.5M"):
             pdf.cell(60, 7, cell_text, border=1)
         pdf.ln()

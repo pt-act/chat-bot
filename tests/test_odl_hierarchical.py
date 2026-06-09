@@ -26,6 +26,7 @@ from ingest.pdf_opendataloader import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _el(id_, etype, content, page=1, section_title=None, heading_level=None):
     return OdlElement(
         id_=id_,
@@ -53,6 +54,7 @@ def _l1_hashes(l1_chunks: list[Document]) -> set[str]:
 # ---------------------------------------------------------------------------
 # 4.4  test_l1_l2_structure
 # ---------------------------------------------------------------------------
+
 
 class TestL1L2Structure:
     def _make_two_section_elements(self):
@@ -87,9 +89,7 @@ class TestL1L2Structure:
         for doc in l2:
             pid = doc.metadata.get("parent_chunk_id")
             assert pid is not None, "L2 chunk has no parent_chunk_id"
-            assert pid in hashes, (
-                f"L2 parent_chunk_id={pid!r} not found in L1 hashes {hashes}"
-            )
+            assert pid in hashes, f"L2 parent_chunk_id={pid!r} not found in L1 hashes {hashes}"
 
     def test_l1_metadata_fields(self):
         l1, _ = build_hierarchical_chunks(self._make_two_section_elements())
@@ -148,6 +148,7 @@ class TestL1L2Structure:
 # 4.5  test_oversized_l1_split
 # ---------------------------------------------------------------------------
 
+
 class TestOversizedL1Split:
     def test_oversized_section_is_split(self):
         """L1 content > chunk_size gets split; each part has chunk_level=1."""
@@ -185,14 +186,13 @@ class TestOversizedL1Split:
         ]
         l1, _ = build_hierarchical_chunks(elements, chunk_size=400, chunk_overlap=50)
         for doc in l1:
-            assert len(doc.page_content) <= 450, (
-                f"L1 chunk too long: {len(doc.page_content)} chars"
-            )
+            assert len(doc.page_content) <= 450, f"L1 chunk too long: {len(doc.page_content)} chars"
 
 
 # ---------------------------------------------------------------------------
 # 4.6  test_non_pdf_unchanged (no chunk_level in output)
 # ---------------------------------------------------------------------------
+
 
 class TestNonPdfUnchanged:
     def test_docx_ingest_no_chunk_level(self, ingest_env):
@@ -207,9 +207,7 @@ class TestNonPdfUnchanged:
 
         try:
             with patch("ingest.policies.load_documents") as mock_load:
-                mock_load.return_value = [
-                    Document(page_content=docx_content, metadata={"page": 0})
-                ]
+                mock_load.return_value = [Document(page_content=docx_content, metadata={"page": 0})]
                 chunks, hashes, diag = _build_chunks(
                     path, "test-doc", "test.docx", "abc123", "2024-01-01T00:00:00Z", ".docx"
                 )
@@ -220,9 +218,7 @@ class TestNonPdfUnchanged:
 
         assert len(chunks) >= 1
         for chunk in chunks:
-            assert "chunk_level" not in chunk.metadata, (
-                "Non-ODL chunk should not have chunk_level field"
-            )
+            assert "chunk_level" not in chunk.metadata, "Non-ODL chunk should not have chunk_level field"
 
     def test_txt_ingest_no_odl_metadata(self, ingest_env):
         """TXT path produces no ODL metadata fields."""
@@ -236,9 +232,7 @@ class TestNonPdfUnchanged:
             path = f.name
 
         try:
-            chunks, _, _ = _build_chunks(
-                path, "test-txt", "test.txt", "hash123", "2024-01-01T00:00:00Z", ".txt"
-            )
+            chunks, _, _ = _build_chunks(path, "test-txt", "test.txt", "hash123", "2024-01-01T00:00:00Z", ".txt")
         finally:
             os.unlink(path)
 
@@ -253,16 +247,23 @@ class TestNonPdfUnchanged:
 
 _section_strategy = st.builds(
     lambda heading_text, n_paras: (
-        [OdlElement(id_=0, page_number=1, element_type="heading",
-                    content=heading_text, heading_level=1)]
-        + [OdlElement(id_=i + 1, page_number=1, element_type="paragraph",
-                      content=f"Para {i} in {heading_text}",
-                      section_title=heading_text)
-           for i in range(n_paras)]
+        [OdlElement(id_=0, page_number=1, element_type="heading", content=heading_text, heading_level=1)]
+        + [
+            OdlElement(
+                id_=i + 1,
+                page_number=1,
+                element_type="paragraph",
+                content=f"Para {i} in {heading_text}",
+                section_title=heading_text,
+            )
+            for i in range(n_paras)
+        ]
     ),
-    heading_text=st.text(min_size=1, max_size=50, alphabet=st.characters(
-        whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters=" "
-    )),
+    heading_text=st.text(
+        min_size=1,
+        max_size=50,
+        alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters=" "),
+    ),
     n_paras=st.integers(min_value=1, max_value=5),
 )
 
@@ -283,9 +284,7 @@ def test_pbt_l2_parent_chunk_id_always_resolvable(sections):
     for doc in l2:
         pid = doc.metadata.get("parent_chunk_id")
         assert pid is not None, "L2 chunk missing parent_chunk_id"
-        assert pid in l1_hashes, (
-            f"L2 parent_chunk_id={pid!r} not resolvable in L1 hashes={l1_hashes}"
-        )
+        assert pid in l1_hashes, f"L2 parent_chunk_id={pid!r} not resolvable in L1 hashes={l1_hashes}"
 
 
 # ---------------------------------------------------------------------------
@@ -305,9 +304,7 @@ class TestSecurity:
         _, l2 = build_hierarchical_chunks(elements)
         for doc in l2:
             pid = doc.metadata["parent_chunk_id"]
-            assert _MD5_PATTERN.match(pid), (
-                f"parent_chunk_id {pid!r} is not a valid MD5 hex string"
-            )
+            assert _MD5_PATTERN.match(pid), f"parent_chunk_id {pid!r} is not a valid MD5 hex string"
 
     def test_l1_chunk_hash_is_md5_hex(self):
         """L1 pre-computed chunk_hash is a valid MD5 hex string."""
@@ -339,6 +336,7 @@ class TestSecurity:
         fake_redis, _ = ingest_env
         # Simulate a pre-existing entry
         from ingest.keys import CONTENT_HASHES_KEY
+
         fake_redis.hset(CONTENT_HASHES_KEY, "existinghash", "existing-doc-id")
 
         result = _check_duplicate_content(fake_redis, "existinghash", "new-doc-id")
@@ -354,6 +352,7 @@ class TestSecurity:
 # Integration: _build_chunks produces correct L1+L2 when ODL elements present
 # ---------------------------------------------------------------------------
 
+
 class TestBuildChunksIntegration:
     def test_odl_path_produces_l1_l2_metadata(self, ingest_env):
         """_build_chunks with mocked ODL returns chunks with chunk_level metadata."""
@@ -364,10 +363,14 @@ class TestBuildChunksIntegration:
         from ingest.policies import _build_chunks
 
         elements = [
-            OdlElement(id_=1, page_number=1, element_type="heading",
-                       content="Test Section", heading_level=1),
-            OdlElement(id_=2, page_number=1, element_type="paragraph",
-                       content="Test paragraph content.", section_title="Test Section"),
+            OdlElement(id_=1, page_number=1, element_type="heading", content="Test Section", heading_level=1),
+            OdlElement(
+                id_=2,
+                page_number=1,
+                element_type="paragraph",
+                content="Test paragraph content.",
+                section_title="Test Section",
+            ),
         ]
 
         pdf_content = b"%PDF-1.4\n%test"
@@ -378,20 +381,38 @@ class TestBuildChunksIntegration:
         try:
             with (
                 patch("ingest.pdf_preflight.preflight_check", return_value=(True, "")),
-                patch("ingest.policies.load_pdf_odl",
-                      return_value=(
-                          [Document(page_content="md chunk", metadata={"page": 0,
-                                                                        "parser": "opendataloader",
-                                                                        "fallback_used": False,
-                                                                        "parser_mode": "local"})],
-                          elements,
-                          {"parser": "opendataloader", "fallback_used": "false",
-                           "page_count": "1", "element_count": "2", "parser_mode": "local"},
-                      )),
+                patch(
+                    "ingest.policies.load_pdf_odl",
+                    return_value=(
+                        [
+                            Document(
+                                page_content="md chunk",
+                                metadata={
+                                    "page": 0,
+                                    "parser": "opendataloader",
+                                    "fallback_used": False,
+                                    "parser_mode": "local",
+                                },
+                            )
+                        ],
+                        elements,
+                        {
+                            "parser": "opendataloader",
+                            "fallback_used": "false",
+                            "page_count": "1",
+                            "element_count": "2",
+                            "parser_mode": "local",
+                        },
+                    ),
+                ),
             ):
                 chunks, hashes, diag = _build_chunks(
-                    path, "test-pdf", "test.pdf", "abc123",
-                    "2024-01-01T00:00:00Z", ".pdf",
+                    path,
+                    "test-pdf",
+                    "test.pdf",
+                    "abc123",
+                    "2024-01-01T00:00:00Z",
+                    ".pdf",
                 )
         finally:
             os.unlink(path)

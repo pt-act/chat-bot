@@ -39,6 +39,7 @@ _DEFAULT_OUT = _ROOT / "eval" / "results" / "pdf_comparison.json"
 # Strategy runners
 # ---------------------------------------------------------------------------
 
+
 def _run_pypdf(simple_pdf_path: Path) -> list[Document]:
     """Strategy 1: PyPDF — raw text extraction, no structure."""
     from langchain_community.document_loaders import PyPDFLoader
@@ -73,6 +74,7 @@ def _run_odl_hierarchical(json_data: dict) -> list[Document]:
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
+
 
 def _has_table_markup(chunk: Document) -> bool:
     """True when page_content contains Markdown table pipe characters."""
@@ -122,6 +124,7 @@ def _passes_gate(results: list[dict]) -> bool:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def run(output_path: Path = _DEFAULT_OUT, simple_pdf_path: Path | None = None) -> dict:
     """Run all three strategies and return the comparison dict."""

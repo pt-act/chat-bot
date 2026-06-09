@@ -20,16 +20,34 @@ _OPERATOR_GUIDE = _ROOT / "docs" / "odl-operator-guide.md"
 # ---------------------------------------------------------------------------
 
 # File extensions that we consider authoritative project references.
-_CODE_EXTENSIONS = frozenset({
-    ".py", ".ts", ".tsx", ".yml", ".yaml", ".json", ".md", ".sh",
-})
+_CODE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".yml",
+        ".yaml",
+        ".json",
+        ".md",
+        ".sh",
+    }
+)
 
 # Only check references that begin with one of these known project directories.
 # This avoids false positives from legacy audit paths and external examples.
 _CHECKED_PREFIXES = (
-    "ingest/", "graph/", "schemas/", "utils/", "docs/",
-    "eval/", "tests/", "web/", "controllers/", "services/",
-    "config.py", "main.py",
+    "ingest/",
+    "graph/",
+    "schemas/",
+    "utils/",
+    "docs/",
+    "eval/",
+    "tests/",
+    "web/",
+    "controllers/",
+    "services/",
+    "config.py",
+    "main.py",
 )
 
 
@@ -44,7 +62,7 @@ def _extract_file_refs(text: str) -> list[str]:
     Returns de-duplicated list.
     """
     # Backtick-quoted strings only: `ingest/policies.py`
-    candidates = re.findall(r'`([a-zA-Z0-9_./-]+)`', text)
+    candidates = re.findall(r"`([a-zA-Z0-9_./-]+)`", text)
     seen: set[str] = set()
     result = []
     for c in candidates:
@@ -76,6 +94,7 @@ def _exists_in_repo(ref: str) -> bool:
 # 11.5  Docs link check
 # ---------------------------------------------------------------------------
 
+
 class TestDocsLinkCheck:
     def _check_doc(self, doc_path: Path) -> list[str]:
         """Return a list of broken references found in the given Markdown file."""
@@ -98,29 +117,21 @@ class TestDocsLinkCheck:
     def test_readme_file_refs_exist(self):
         """All file references in README.md point to existing files."""
         broken = self._check_doc(_README)
-        assert broken == [], (
-            f"README.md contains references to non-existent files: {broken}"
-        )
+        assert broken == [], f"README.md contains references to non-existent files: {broken}"
 
     def test_ptd_file_refs_exist(self):
         """All file references in PTD.md point to existing files."""
         broken = self._check_doc(_PTD)
-        assert broken == [], (
-            f"PTD.md contains references to non-existent files: {broken}"
-        )
+        assert broken == [], f"PTD.md contains references to non-existent files: {broken}"
 
     def test_operator_guide_exists(self):
         """docs/odl-operator-guide.md is present."""
-        assert _OPERATOR_GUIDE.exists(), (
-            "docs/odl-operator-guide.md not found"
-        )
+        assert _OPERATOR_GUIDE.exists(), "docs/odl-operator-guide.md not found"
 
     def test_operator_guide_file_refs_exist(self):
         """All file references in the operator guide point to existing files."""
         broken = self._check_doc(_OPERATOR_GUIDE)
-        assert broken == [], (
-            f"docs/odl-operator-guide.md contains references to non-existent files: {broken}"
-        )
+        assert broken == [], f"docs/odl-operator-guide.md contains references to non-existent files: {broken}"
 
     def test_odl_components_in_ptd(self):
         """PTD.md documents the two new ODL modules."""
@@ -163,31 +174,30 @@ class TestDocsLinkCheck:
 # 11.6  Security warning: operator guide warns about external port exposure
 # ---------------------------------------------------------------------------
 
+
 class TestOperatorGuideSecurity:
     def test_warns_against_external_port(self):
         """11.6: operator guide explicitly warns against exposing odl-hybrid port."""
         guide = _OPERATOR_GUIDE.read_text(encoding="utf-8")
-        assert "external" in guide.lower() and ("port" in guide.lower() or "expose" in guide.lower()), (
-            "Operator guide must warn against exposing odl-hybrid port externally"
-        )
+        assert "external" in guide.lower() and (
+            "port" in guide.lower() or "expose" in guide.lower()
+        ), "Operator guide must warn against exposing odl-hybrid port externally"
 
     def test_warns_about_hybrid_url_trust(self):
         """11.7: operator guide warns ODL_HYBRID_URL must point to a trusted host."""
         guide = _OPERATOR_GUIDE.read_text(encoding="utf-8")
-        assert "trusted" in guide.lower() or "untrusted" in guide.lower(), (
-            "Operator guide must note ODL_HYBRID_URL should point to a trusted host"
-        )
+        assert (
+            "trusted" in guide.lower() or "untrusted" in guide.lower()
+        ), "Operator guide must note ODL_HYBRID_URL should point to a trusted host"
 
     def test_warns_about_internal_network(self):
         """Operator guide notes sidecar is internal-only."""
         guide = _OPERATOR_GUIDE.read_text(encoding="utf-8")
-        assert "internal" in guide.lower(), (
-            "Operator guide must state that odl-hybrid is on the internal network"
-        )
+        assert "internal" in guide.lower(), "Operator guide must state that odl-hybrid is on the internal network"
 
     def test_http_https_scheme_validation_documented(self):
         """Operator guide mentions URL scheme validation."""
         guide = _OPERATOR_GUIDE.read_text(encoding="utf-8")
-        assert "http://" in guide or "https://" in guide, (
-            "Operator guide must document the expected URL scheme for ODL_HYBRID_URL"
-        )
+        assert (
+            "http://" in guide or "https://" in guide
+        ), "Operator guide must document the expected URL scheme for ODL_HYBRID_URL"
