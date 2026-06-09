@@ -46,7 +46,7 @@ class CircuitBreakerOpen(RuntimeError):
 
 def is_transient(exc: BaseException) -> bool:
     """True when ``exc`` looks like a retryable, transient provider failure."""
-    if isinstance(exc, (TimeoutError, ConnectionError)):
+    if isinstance(exc, TimeoutError | ConnectionError):
         return True
     for attr in ("status_code", "http_status", "code", "status"):
         val = getattr(exc, attr, None)

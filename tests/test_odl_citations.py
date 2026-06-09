@@ -11,17 +11,15 @@ Covers:
 - _to_source() maps all four new metadata fields
 """
 
-import re
 import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.documents import Document
 
-from ingest.pdf_opendataloader import _validate_bbox
 from graph.nodes.retrieve_context import _to_source
-from schemas.ingest import IngestRequest, _PAGES_PATTERN
-
+from ingest.pdf_opendataloader import _validate_bbox
+from schemas.ingest import _PAGES_PATTERN, IngestRequest
 
 # ---------------------------------------------------------------------------
 # 6.6 / 6.7  _to_source — new fields present and absent
@@ -99,6 +97,7 @@ class TestParserOverride:
     def test_pypdf_override_in_build_chunks(self, ingest_env):
         """parser_override='pypdf' forces PyPDF regardless of ODL availability."""
         import os
+
         from ingest.policies import _build_chunks
 
         fake_redis, _ = ingest_env
@@ -230,6 +229,7 @@ class TestApiParserValidation:
     def test_invalid_parser_returns_422(self):
         """POST /ingest with parser='badvalue' returns 422."""
         from fastapi.testclient import TestClient
+
         from main import app
 
         client = TestClient(app)
@@ -246,7 +246,6 @@ class TestApiParserValidation:
 
     def test_valid_parser_passes_schema_validation(self):
         """parser='pypdf' passes Pydantic schema validation (no 422)."""
-        from pydantic import ValidationError
         # If this doesn't raise, schema accepts the value → would not 422 at API level.
         req = IngestRequest(
             file_name="testdoc",
@@ -274,7 +273,6 @@ class TestBboxValidation:
         assert _validate_bbox([1.0, 2.0, 3.0, 4.0, 5.0]) is None  # 5 elements
 
     def test_nan_returns_none(self):
-        import math
         assert _validate_bbox([1.0, float("nan"), 3.0, 4.0]) is None
 
     def test_inf_returns_none(self):
@@ -334,9 +332,10 @@ class TestPagesValidation:
 
     def test_load_pdf_odl_rejects_bad_pages(self, pdf_v1_bytes):
         """load_pdf_odl raises ValueError for invalid pages string."""
-        from ingest.pdf_opendataloader import load_pdf_odl
-        from unittest.mock import patch, MagicMock
         import sys
+        from unittest.mock import patch
+
+        from ingest.pdf_opendataloader import load_pdf_odl
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(pdf_v1_bytes)
@@ -352,14 +351,17 @@ class TestPagesValidation:
                 with pytest.raises(ValueError, match="pages must be"):
                     load_pdf_odl(path, settings=Settings(), pages="../hack")
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
     def test_load_pdf_odl_accepts_valid_pages(self, pdf_v1_bytes):
         """load_pdf_odl passes valid pages string to convert()."""
-        from ingest.pdf_opendataloader import load_pdf_odl
-        from pathlib import Path
-        from unittest.mock import patch, MagicMock
         import sys
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from ingest.pdf_opendataloader import load_pdf_odl
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(pdf_v1_bytes)
@@ -380,7 +382,9 @@ class TestPagesValidation:
                 from config import Settings
                 load_pdf_odl(path, settings=Settings(), pages="1-5")
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         called_kwargs = mock_odl.convert.call_args[1]
         assert called_kwargs.get("pages") == "1-5"

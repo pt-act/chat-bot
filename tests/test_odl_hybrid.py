@@ -14,9 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,7 +71,9 @@ class TestHybridFallbackEnabled:
                 )
                 chunks, elements, diag = load_pdf_odl(path, settings=s)
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         assert diag["parser_mode"] == "local", (
             f"Expected parser_mode=local when hybrid unreachable+fallback, got {diag['parser_mode']!r}"
@@ -110,7 +110,9 @@ class TestHybridFallbackEnabled:
                 )
                 chunks, elements, diag = load_pdf_odl(path, settings=s)
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         assert len(chunks) >= 1
 
@@ -147,7 +149,9 @@ class TestHybridFallbackDisabled:
                 with pytest.raises(RuntimeError, match="unreachable"):
                     load_pdf_odl(path, settings=s)
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         # convert() should NOT have been called
         mock_odl.convert.assert_not_called()
@@ -176,7 +180,9 @@ class TestHybridFallbackDisabled:
                 with pytest.raises(RuntimeError) as exc_info:
                     load_pdf_odl(path, settings=s)
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         assert "odl-hybrid:5002" in str(exc_info.value) or "unreachable" in str(exc_info.value)
 

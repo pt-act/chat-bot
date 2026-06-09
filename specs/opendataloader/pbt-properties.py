@@ -18,11 +18,9 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
-from unittest.mock import MagicMock, patch
 
 import pytest
-from hypothesis import assume, given, settings
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 # ---------------------------------------------------------------------------
@@ -85,7 +83,7 @@ java_version_string = st.one_of(
 # Group 1 — Java Version Parsing
 # ---------------------------------------------------------------------------
 
-def parse_java_major_version(version_str: str) -> Optional[int]:
+def parse_java_major_version(version_str: str) -> int | None:
     """Extract major version number from java -version output."""
     match = re.search(r'"?(\d+)\.(\d+)', version_str)
     if match:
@@ -181,8 +179,8 @@ def test_pbt_field_mapper_element_type_never_null(raw):
 class MockElement:
     element_type: str
     content: str
-    section_title: Optional[str] = None
-    heading_level: Optional[int] = None
+    section_title: str | None = None
+    heading_level: int | None = None
     id_: int = 0
     page_number: int = 1
     bbox: list = field(default_factory=lambda: [0.0, 0.0, 100.0, 20.0])
@@ -256,10 +254,10 @@ def test_pbt_section_propagation_heading_count_unchanged(elements):
 class MockTable:
     id_: int
     page_number: int
-    next_table_id: Optional[int] = None
-    previous_table_id: Optional[int] = None
+    next_table_id: int | None = None
+    previous_table_id: int | None = None
     content: str = "table content"
-    page_end: Optional[int] = None
+    page_end: int | None = None
 
 
 def build_independent_tables():
@@ -354,7 +352,7 @@ def test_pbt_table_merger_chain_reduces_count(n_fragments, start_page):
 # Group 2 — Temp Directory Cleanup
 # ---------------------------------------------------------------------------
 
-def simulate_odl_convert_with_cleanup(should_fail: bool) -> Optional[dict]:
+def simulate_odl_convert_with_cleanup(should_fail: bool) -> dict | None:
     """
     Simulates the ODL adapter's convert+cleanup pattern.
     Returns result dict or raises RuntimeError.
@@ -526,11 +524,11 @@ page_range_invalid = st.one_of(
 )
 
 
-def validate_parser_value(parser: Optional[str]) -> bool:
+def validate_parser_value(parser: str | None) -> bool:
     return parser in {None, "pypdf", "opendataloader"}
 
 
-def validate_pages_value(pages: Optional[str]) -> bool:
+def validate_pages_value(pages: str | None) -> bool:
     if pages is None:
         return True
     return bool(valid_pages_pattern.match(pages))

@@ -16,10 +16,18 @@ class Source(BaseModel):
     page: int | None = Field(default=None, examples=[3])
     snippet: str | None = Field(default=None, examples=["Customers may return any item..."])
     # ODL-enriched citation fields (FR7) — None for non-ODL chunks; old clients ignore nulls.
-    section: str | None = Field(default=None, examples=["Return Policy"], description="Heading text of the containing section")
-    element_type: str | None = Field(default=None, examples=["table"], description="ODL element type (paragraph, table, list, …)")
-    page_end: int | None = Field(default=None, examples=[4], description="Last page for multi-page elements")
-    bbox: list[float] | None = Field(default=None, examples=[[72.0, 680.0, 540.0, 740.0]], description="[left, bottom, right, top] in PDF points")
+    section: str | None = Field(
+        default=None, examples=["Return Policy"], description="Heading text of the containing section"
+    )
+    element_type: str | None = Field(
+        default=None, examples=["table"], description="ODL element type (paragraph, table, list, …)"
+    )
+    page_end: int | None = Field(
+        default=None, examples=[4], description="Last page for multi-page elements"
+    )
+    bbox: list[float] | None = Field(
+        default=None, examples=[[72.0, 680.0, 540.0, 740.0]], description="[left, bottom, right, top] in PDF points"
+    )
 
 
 class TokenUsage(BaseModel):

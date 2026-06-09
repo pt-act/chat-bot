@@ -9,23 +9,18 @@ Covers:
 - Security: _check_duplicate_content path unchanged (4.9)
 """
 
-import hashlib
 import re
 import tempfile
 from unittest.mock import patch
 
-import pytest
-from hypothesis import given, settings as h_settings
+from hypothesis import given
 from hypothesis import strategies as st
 from langchain_core.documents import Document
 
 from ingest.pdf_opendataloader import (
     OdlElement,
     build_hierarchical_chunks,
-    _clean_odl_text,
-    _odl_chunk_hash,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -202,14 +197,12 @@ class TestOversizedL1Split:
 class TestNonPdfUnchanged:
     def test_docx_ingest_no_chunk_level(self, ingest_env):
         """DOCX path through _build_chunks produces no chunk_level in metadata."""
-        import tempfile
         from ingest.policies import _build_chunks
 
         fake_redis, _ = ingest_env
         docx_content = "Document content\n\nSecond paragraph"
 
         with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:
-            import tempfile as tmp
             path = f.name
 
         try:
@@ -221,7 +214,9 @@ class TestNonPdfUnchanged:
                     path, "test-doc", "test.docx", "abc123", "2024-01-01T00:00:00Z", ".docx"
                 )
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         assert len(chunks) >= 1
         for chunk in chunks:
@@ -231,7 +226,8 @@ class TestNonPdfUnchanged:
 
     def test_txt_ingest_no_odl_metadata(self, ingest_env):
         """TXT path produces no ODL metadata fields."""
-        import os, tempfile
+        import os
+
         from ingest.policies import _build_chunks
 
         content = "Plain text content for testing"
@@ -361,11 +357,11 @@ class TestSecurity:
 class TestBuildChunksIntegration:
     def test_odl_path_produces_l1_l2_metadata(self, ingest_env):
         """_build_chunks with mocked ODL returns chunks with chunk_level metadata."""
-        import os, tempfile, sys
-        from pathlib import Path
-        from unittest.mock import MagicMock, patch
-        from ingest.policies import _build_chunks
+        import os
+        from unittest.mock import patch
+
         from ingest.pdf_opendataloader import OdlElement
+        from ingest.policies import _build_chunks
 
         elements = [
             OdlElement(id_=1, page_number=1, element_type="heading",

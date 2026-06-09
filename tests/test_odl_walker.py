@@ -11,8 +11,7 @@ Covers:
 - Security: _extract_content never evals content (3.13)
 """
 
-import pytest
-from hypothesis import given, settings as h_settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from ingest.pdf_opendataloader import (
@@ -22,17 +21,29 @@ from ingest.pdf_opendataloader import (
     walk_tree,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixture JSON builders
 # ---------------------------------------------------------------------------
 
 def _heading(id_: int, text: str, level: int = 1, page: int = 1) -> dict:
-    return {"type": "heading", "id": id_, "content": text, "heading level": level, "page number": page, "bounding box": [0.0, 0.0, 100.0, 20.0]}
+    return {
+        "type": "heading",
+        "id": id_,
+        "content": text,
+        "heading level": level,
+        "page number": page,
+        "bounding box": [0.0, 0.0, 100.0, 20.0],
+    }
 
 
 def _paragraph(id_: int, text: str, page: int = 1) -> dict:
-    return {"type": "paragraph", "id": id_, "content": text, "page number": page, "bounding box": [0.0, 25.0, 100.0, 40.0]}
+    return {
+        "type": "paragraph",
+        "id": id_,
+        "content": text,
+        "page number": page,
+        "bounding box": [0.0, 25.0, 100.0, 40.0],
+    }
 
 
 def _table(id_: int, rows: list[list[str]], page: int = 1, next_id=None, prev_id=None) -> dict:
@@ -222,8 +233,6 @@ class TestTableMerge:
         assert "Row 2" in tables[0].content
 
     def test_independent_tables_unchanged(self):
-        t1 = _table(1, [["A"]], page=1)
-        t2 = _table(2, [["B"]], page=2)
         elements = [
             OdlElement(id_=1, page_number=1, element_type="table", content="A"),
             OdlElement(id_=2, page_number=2, element_type="table", content="B"),
@@ -361,7 +370,6 @@ def test_pbt_merge_tables_count_formula(m_chains, chain_len, n_independent):
     id_counter = 1
 
     for c in range(m_chains):
-        chain_start_id = id_counter
         for i in range(chain_len):
             tid = id_counter
             next_id = id_counter + 1 if i < chain_len - 1 else None

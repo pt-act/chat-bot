@@ -19,14 +19,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 
+from graph.nodes.retrieve_context import _to_source
 from ingest.pdf_opendataloader import (
     OdlElement,
     _extract_content,
     build_hierarchical_chunks,
     walk_tree,
 )
-from graph.nodes.retrieve_context import _to_source
-
 
 # ---------------------------------------------------------------------------
 # 8.1  _extract_content handles formula and picture (sanity checks)
@@ -192,6 +191,7 @@ class TestEnrichmentRequiresFullMode:
     def test_enrich_formula_auto_mode_raises(self):
         """ODL_ENRICH_FORMULA=true requires ODL_HYBRID_MODE=full."""
         from pydantic import ValidationError
+
         from config import Settings
         with pytest.raises((ValidationError, ValueError), match="ODL_ENRICH_FORMULA"):
             Settings(odl_enrich_formula=True, odl_hybrid_mode="auto")
@@ -199,6 +199,7 @@ class TestEnrichmentRequiresFullMode:
     def test_enrich_pictures_auto_mode_raises(self):
         """ODL_ENRICH_PICTURES=true requires ODL_HYBRID_MODE=full."""
         from pydantic import ValidationError
+
         from config import Settings
         with pytest.raises((ValidationError, ValueError), match="ODL_ENRICH_PICTURES"):
             Settings(odl_enrich_pictures=True, odl_hybrid_mode="auto")
@@ -243,7 +244,9 @@ class TestEnrichmentRequiresFullMode:
                 )
                 load_pdf_odl(path, settings=s)
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         called_kwargs = mock_odl.convert.call_args[1]
         assert called_kwargs.get("enrich_formula") is True, (
@@ -280,7 +283,9 @@ class TestEnrichmentRequiresFullMode:
                 )
                 load_pdf_odl(path, settings=s)
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         called_kwargs = mock_odl.convert.call_args[1]
         assert called_kwargs.get("enrich_pictures") is True
@@ -310,7 +315,9 @@ class TestEnrichmentRequiresFullMode:
                 s = Settings()
                 load_pdf_odl(path, settings=s)
         finally:
-            import os; os.unlink(path)
+            import os
+
+            os.unlink(path)
 
         called_kwargs = mock_odl.convert.call_args[1]
         assert "enrich_formula" not in called_kwargs

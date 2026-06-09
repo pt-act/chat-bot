@@ -11,10 +11,8 @@ without requiring a separate Python invocation.
 
 import json as _json
 import sys
-import tempfile
 from pathlib import Path
 
-import pytest
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -127,7 +125,6 @@ class TestEvalHarness:
 
     def test_eval_writes_json_output(self, tmp_path):
         """Eval harness writes valid JSON to the output path."""
-        import sys
         _chat_bot_root = str(Path(__file__).parent.parent)
         if _chat_bot_root not in sys.path:
             sys.path.insert(0, _chat_bot_root)
@@ -135,7 +132,7 @@ class TestEvalHarness:
         from eval.pdf_comparison import run as eval_run
 
         out_path = tmp_path / "results" / "pdf_comparison.json"
-        summary = eval_run(output_path=out_path)
+        eval_run(output_path=out_path)
 
         assert out_path.exists(), "Eval did not write output file"
         data = _json.loads(out_path.read_text(encoding="utf-8"))
@@ -165,7 +162,7 @@ class TestEvalGate:
         """10.6: gate_passed=True — at least one ODL metric beats the PyPDF baseline."""
         summary = _run_eval()
         assert summary["gate_passed"] is True, (
-            f"Eval gate failed. Results:\n"
+            "Eval gate failed. Results:\n"
             + "\n".join(f"  {r}" for r in summary["results"])
         )
 

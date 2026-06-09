@@ -3,9 +3,10 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from hypothesis import assume, given, strategies as st
+from hypothesis import given
+from hypothesis import strategies as st
 
-from config import Settings, get_settings
+from config import Settings
 from ingest.loaders import load_documents
 from ingest.pdf_preflight import (
     _hybrid_reachable,

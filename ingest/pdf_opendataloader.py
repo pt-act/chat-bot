@@ -21,7 +21,7 @@ import math
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from langchain_community.document_loaders import PyPDFLoader

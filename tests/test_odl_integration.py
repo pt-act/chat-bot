@@ -14,16 +14,14 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from langchain_core.documents import Document
 
+from graph.nodes.retrieve_context import _to_source
 from ingest.pdf_opendataloader import (
-    OdlElement,
     build_hierarchical_chunks,
     merge_tables,
     walk_tree,
 )
-from graph.nodes.retrieve_context import _to_source
 
 # ---------------------------------------------------------------------------
 # Fixture paths
@@ -346,7 +344,9 @@ class TestMultipageTableMerged:
 class TestNonPdfIngestUnchanged:
     def test_txt_ingest_produces_no_odl_metadata(self, ingest_env):
         """TXT files go through the legacy splitter — no chunk_level or element_type."""
-        import os, tempfile
+        import os
+        import tempfile
+
         from ingest.policies import _build_chunks
 
         content = "Plain text content for regression testing of non-PDF ingest."
@@ -369,8 +369,9 @@ class TestNonPdfIngestUnchanged:
 
     def test_docx_load_uses_legacy_splitter(self, ingest_env):
         """DOCX files bypass ODL entirely."""
-        from ingest.policies import _build_chunks
         from langchain_core.documents import Document
+
+        from ingest.policies import _build_chunks
 
         with patch("ingest.policies.load_documents") as mock_load:
             mock_load.return_value = [

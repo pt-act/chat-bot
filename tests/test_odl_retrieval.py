@@ -15,17 +15,16 @@ Covers:
 from unittest.mock import MagicMock
 
 import pytest
-from hypothesis import given, settings as h_settings
+from hypothesis import given
 from hypothesis import strategies as st
 from langchain_core.documents import Document
 
+from graph.nodes.retrieve_context import _select_documents, _snippet
 from ingest.retrieval import (
-    TABLE_QUERY_TERMS,
     OVERVIEW_QUERY_TERMS,
+    TABLE_QUERY_TERMS,
     hierarchical_retrieve,
 )
-from graph.nodes.retrieve_context import _select_documents, _snippet
-
 
 # ---------------------------------------------------------------------------
 # Document helpers

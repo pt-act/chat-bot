@@ -26,10 +26,10 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document  # noqa: E402
+from langchain_text_splitters import RecursiveCharacterTextSplitter  # noqa: E402
 
-from ingest.pdf_opendataloader import build_hierarchical_chunks, merge_tables, walk_tree
+from ingest.pdf_opendataloader import build_hierarchical_chunks, merge_tables, walk_tree  # noqa: E402
 
 _FIXTURES = _ROOT / "tests" / "fixtures"
 _DEFAULT_OUT = _ROOT / "eval" / "results" / "pdf_comparison.json"

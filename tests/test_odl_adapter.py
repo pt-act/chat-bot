@@ -7,17 +7,14 @@ Tests cover:
 """
 
 import os
-import shutil
 import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from hypothesis import given, settings as h_settings
+from hypothesis import given
 from hypothesis import strategies as st
-from langchain_core.documents import Document
-
 
 # ---------------------------------------------------------------------------
 # Helpers / shared mocks
