@@ -36,7 +36,8 @@ class TestUploadEndpoint:
         assert resp.headers["Location"] == "/api/v1/ingest/status/Q3_Report"
         assert redis.hget(ingest_status_key("Q3_Report"), "status") == "queued"
         mock_ingest.assert_called_once()
-        called_doc_id, called_path, called_ext = mock_ingest.call_args[0]
+        called_args = mock_ingest.call_args[0]
+        called_doc_id, called_path, called_ext = called_args[0], called_args[1], called_args[2]
         assert called_doc_id == "Q3_Report"
         assert called_ext == ".pdf"
         # temp file was written; clean it up (the mocked background task won't)

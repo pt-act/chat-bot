@@ -21,6 +21,26 @@ bun run build      # tsc -b && vite build  → dist/
 bun run typecheck
 ```
 
+## Tests
+
+### Unit tests (vitest + jsdom)
+
+```bash
+bun run test       # vitest run
+```
+
+### E2E tests (Playwright)
+
+```bash
+bun run e2e        # playwright test (headless)
+bun run e2e:ui     # playwright test --ui (interactive UI mode)
+bun run e2e:debug  # playwright test --debug (step-through debugging)
+```
+
+E2E tests start the dev server automatically (`webServer` in `playwright.config.ts`).
+The backend does not need to be running — tests verify static UI elements and basic
+interactions independently of API availability.
+
 ## What it shows
 
 - **Streaming chat** — `POST /api/v1/chat/stream` parsed as Server-Sent Events

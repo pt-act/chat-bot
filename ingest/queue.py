@@ -63,12 +63,25 @@ def _cleanup_upload(job: dict) -> None:
 
 def _run_job(redis, job: dict) -> dict:
     doc_id = job["file_name"]
+    parser = job.get("parser")
+    hybrid_mode = job.get("hybrid_mode")
+    pages = job.get("pages")
     if job["kind"] == "url":
         # process_policy re-downloads each attempt and handles its own temp cleanup + SSRF.
-        return process_policy(doc_id, job["s3_url"])
+        return process_policy(
+            doc_id, job["s3_url"],
+            parser_override=parser,
+            hybrid_mode_override=hybrid_mode,
+            pages_override=pages,
+        )
     # Upload: run the shared core directly so the staged file survives transient retries
     # (process_uploaded would delete it). The queue layer owns the file's lifecycle.
-    return _run_ingest(redis, doc_id, doc_id, job["file_path"], job["ext"])
+    return _run_ingest(
+        redis, doc_id, doc_id, job["file_path"], job["ext"],
+        parser_override=parser,
+        hybrid_mode_override=hybrid_mode,
+        pages_override=pages,
+    )
 
 
 def process_one(redis=None, block_timeout: int = 5) -> dict | None:

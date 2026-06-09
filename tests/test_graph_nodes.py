@@ -58,7 +58,7 @@ class TestRetrieveContext:
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
     def test_below_threshold_returns_empty_strict(self, mock_settings, mock_get_vs):
-        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
+        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, retrieval_strategy="mmr")
         vs = MagicMock()
         vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.3)]
         mock_get_vs.return_value = vs
@@ -69,7 +69,7 @@ class TestRetrieveContext:
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
     def test_above_threshold_uses_mmr_with_scores(self, mock_settings, mock_get_vs):
-        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
+        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, retrieval_strategy="mmr")
         vs = MagicMock()
         doc1 = MagicMock(
             page_content="chunk one",
@@ -92,19 +92,21 @@ class TestRetrieveContext:
         assert result["docs"] == "chunk one\n\nchunk two"
         assert result["best_score"] == 0.8
         # Citations keep their relevance scores (joined from the scored pool by chunk_hash).
-        assert result["sources"][0] == {
-            "label": "policy.pdf",
-            "doc_id": "policy",
-            "score": 0.8,
-            "page": 1,
-            "snippet": "chunk one",
-        }
+        src0 = result["sources"][0]
+        assert src0["label"] == "policy.pdf"
+        assert src0["doc_id"] == "policy"
+        assert src0["score"] == 0.8
+        assert src0["page"] == 1
+        assert src0["snippet"] == "chunk one"
+        # New ODL fields default to None for non-ODL chunks (FR7 — non-breaking extension).
+        assert src0["section"] is None
+        assert src0["element_type"] is None
         assert result["sources"][1]["score"] == 0.7
 
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
     def test_no_results_returns_empty(self, mock_settings, mock_get_vs):
-        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
+        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, retrieval_strategy="mmr")
         vs = MagicMock()
         vs.similarity_search_with_relevance_scores.return_value = []
         mock_get_vs.return_value = vs
@@ -115,7 +117,7 @@ class TestRetrieveContext:
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
     def test_open_mode_returns_low_score_docs(self, mock_settings, mock_get_vs):
-        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
+        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, retrieval_strategy="mmr")
         vs = MagicMock()
         vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.2)]
         doc1 = MagicMock()
@@ -134,7 +136,7 @@ class TestRetrieveContext:
     @patch("graph.nodes.retrieve_context.get_vectorstore")
     @patch("graph.nodes.retrieve_context.get_settings")
     def test_learning_mode_returns_low_score_docs(self, mock_settings, mock_get_vs, mock_get_synth):
-        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5)
+        mock_settings.return_value = MagicMock(retrieval_score_threshold=0.5, retrieval_strategy="mmr")
         vs = MagicMock()
         vs.similarity_search_with_relevance_scores.return_value = [("doc", 0.15)]
         doc1 = MagicMock()

@@ -238,6 +238,10 @@ centralized in `config.LEARNING_MODES`.
 **ChromaDB collections** (same persist dir, different names)
 - `policies` (configurable) — authoritative ingested chunks. Metadata: `doc_id`,
   `source_file`, `file_hash`, `chunk_hash`, `chunk_index`, `page_number`, `version`.
+  ODL-ingested PDFs additionally carry: `chunk_level` (1=section, 2=element),
+  `section_title`, `element_type` (`section`/`paragraph`/`table`/`list`/`formula`/`picture`),
+  `parent_chunk_id` (L2→L1 reference), `heading_level`, `bbox` ([l,b,r,t] PDF pts), `page_end`.
+  Non-ODL chunks have none of these fields; all consumers tolerate their absence.
 - `synthesized_answers` — learning-mode synthesized content; consulted only in learning
   mode (isolation prevents knowledge-base poisoning).
 
@@ -253,7 +257,11 @@ centralized in `config.LEARNING_MODES`.
 | `REDIS_HOST/PORT/PASSWORD` / `REDIS_TTL_SECONDS` | localhost/6379/""/86400 | Redis + memory TTL. |
 | `CHROMA_PERSIST_DIR` / `CHROMA_COLLECTION` / `SYNTHESIZED_COLLECTION` | ./chroma_db / policies / synthesized_answers | Vector store. |
 | `CHAT_MODE` / `RETRIEVAL_SCORE_THRESHOLD` / `SELF_INGEST_MIN_LENGTH` | strict / 0.3 / 50 | RAG behavior. `CHAT_MODE` ∈ `strict`/`open`/`learning`/`learning_review` (the last queues synthesized answers for review). |
-| `RETRIEVAL_STRATEGY` | mmr | `mmr` (default) / `hybrid` (dense + BM25 via RRF) / `hybrid_rerank` (Phase 4). |
+| `RETRIEVAL_STRATEGY` | mmr | `mmr` (default) / `hybrid` (dense + BM25 via RRF) / `hybrid_rerank` / `hierarchical` (L1/L2-aware with element-type heuristics). |
+| `PDF_PARSER` / `PDF_PARSER_FALLBACK` | _(auto)_ / true | Force `pypdf` or `opendataloader`; fallback to PyPDF on ODL failure. |
+| `ODL_FORMAT` / `ODL_READING_ORDER` | json,markdown / xycut | ODL output format and reading-order algorithm. |
+| `ODL_HYBRID` / `ODL_HYBRID_MODE` / `ODL_HYBRID_URL` / `ODL_HYBRID_FALLBACK` | _(off)_ / auto / _(auto)_ / false | Hybrid OCR/AI sidecar: backend id, routing mode, URL, fallback to local Java. |
+| `ODL_ENRICH_FORMULA` / `ODL_ENRICH_PICTURES` | false / false | Extract LaTeX (formula) and image descriptions (picture); require `ODL_HYBRID_MODE=full`. |
 | `QUERY_REWRITE_ENABLED` | true | Context-aware query rewriting before retrieval (#1). |
 | `GROUNDEDNESS_ENABLED` / `GROUNDEDNESS_MODE` / `GROUNDEDNESS_MIN_SCORE` / `STRICT_REFUSE_ON_UNGROUNDED` | true / heuristic / 0.5 / true | Groundedness verification + strict-mode refusal of unsupported answers (#2). |
 | `PROVIDER_MAX_RETRIES` / `PROVIDER_RETRY_BASE_DELAY` / `CIRCUIT_BREAKER_ENABLED` / `CB_FAILURE_THRESHOLD` / `CB_RESET_SECONDS` | 3 / 0.5 / true / 5 / 30 | Provider retry/backoff + circuit breaker (#14). |

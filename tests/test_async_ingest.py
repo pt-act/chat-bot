@@ -30,7 +30,7 @@ class TestAsyncIngest:
         assert resp.headers["Location"] == "/api/v1/ingest/status/policy"
         # initial status persisted + scheduled background work executed (TestClient runs it)
         assert redis.hget(ingest_status_key("policy"), "status") == "queued"
-        mock_ingest.assert_called_once_with("policy", "https://b.s3.amazonaws.com/p.pdf")
+        mock_ingest.assert_called_once_with("policy", "https://b.s3.amazonaws.com/p.pdf", None, None, None)
 
     def test_status_pollable_after_queue(self):
         redis = fakeredis.FakeRedis(decode_responses=True)

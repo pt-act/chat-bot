@@ -13,6 +13,7 @@ import logging
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 
+from ingest.pdf_opendataloader import load_pdf_odl
 from ingest.pdf_preflight import preflight_check
 
 logger = logging.getLogger(__name__)
@@ -67,19 +68,20 @@ def _load_pdf(file_path: str, parser: str | None = None) -> list[Document]:
 
     ``parser`` overrides:
     - ``"pypdf"`` → force PyPDFLoader
-    - ``"opendataloader"`` → OpenDataLoader (stub — implemented in Group 2)
+    - ``"opendataloader"`` → OpenDataLoader Markdown adapter
     - ``None`` → auto-detect via preflight (ODL when Java present, else PyPDF)
     """
     if parser == "pypdf":
         return PyPDFLoader(file_path).load()
     if parser == "opendataloader":
-        # Group 2 will implement the real adapter here.
-        raise NotImplementedError("OpenDataLoader adapter not yet implemented (Group 2)")
+        docs, _, _ = load_pdf_odl(file_path)
+        return docs
     # Auto-detect when parser is None
     if parser is None:
         ok, _ = preflight_check()
         if ok:
-            raise NotImplementedError("OpenDataLoader adapter not yet implemented (Group 2)")
+            docs, _, _ = load_pdf_odl(file_path)
+            return docs
         logger.info("ODL preflight failed; falling back to PyPDFLoader for %s", file_path)
         return PyPDFLoader(file_path).load()
     raise ValueError(f"Unsupported PDF parser: {parser!r}")

@@ -1,0 +1,56 @@
+{
+  "number of pages": 1,
+  "kids": [
+    {
+      "type": "heading",
+      "id": 1,
+      "content": "Scanned Invoice",
+      "heading level": 1,
+      "page number": 1,
+      "bounding box": [72.0, 680.0, 540.0, 700.0]
+    },
+    {
+      "type": "paragraph",
+      "id": 2,
+      "content": "Invoice number INV-2024-001 for consulting services rendered in Q1 2024.",
+      "page number": 1,
+      "bounding box": [72.0, 650.0, 540.0, 670.0]
+    },
+    {
+      "type": "table",
+      "id": 3,
+      "page number": 1,
+      "bounding box": [72.0, 600.0, 540.0, 645.0],
+      "rows": [
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "Item",        "id": 300, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "Hours",       "id": 301, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "Amount",      "id": 302, "page number": 1}]}
+          ]
+        },
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "Consulting",  "id": 303, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "40",          "id": 304, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "$5,000",      "id": 305, "page number": 1}]}
+          ]
+        },
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "Total",       "id": 306, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "",            "id": 307, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "$5,000",      "id": 308, "page number": 1}]}
+          ]
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "id": 4,
+      "content": "Payment due within 30 days. Thank you for your business.",
+      "page number": 1,
+      "bounding box": [72.0, 565.0, 540.0, 585.0]
+    }
+  ]
+}

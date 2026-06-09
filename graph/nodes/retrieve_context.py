@@ -7,6 +7,8 @@ logger = logging.getLogger(__name__)
 
 _SNIPPET_LEN = 200
 
+_VALID_STRATEGIES: frozenset[str] = frozenset({"mmr", "hybrid", "hybrid_rerank", "hierarchical"})
+
 
 def _search_synthesized(question: str, k: int = 3) -> list:
     """Best-effort lookup of previously self-ingested answers (learning mode only).
@@ -24,6 +26,12 @@ def _search_synthesized(question: str, k: int = 3) -> list:
 
 def _snippet(text: str) -> str:
     text = (text or "").strip()
+    # L1 chunks start with a Markdown heading ("# Title").  Skip the heading line
+    # so the snippet shows actual content rather than just the section title.
+    if text.startswith("#"):
+        after = text.split("\n", 1)
+        if len(after) > 1 and after[1].strip():
+            text = after[1].strip()
     if len(text) <= _SNIPPET_LEN:
         return text
     return text[:_SNIPPET_LEN].rsplit(" ", 1)[0] + "…"
@@ -44,6 +52,11 @@ def _to_source(doc, score: float | None = None) -> dict:
         "score": round(float(score), 4) if score is not None else None,
         "page": meta.get("page_number"),
         "snippet": _snippet(doc.page_content),
+        # ODL-enriched fields (FR7) — None for non-ODL chunks; fall through silently.
+        "section": meta.get("section_title"),
+        "element_type": meta.get("element_type"),
+        "page_end": meta.get("page_end"),
+        "bbox": meta.get("bbox"),
     }
 
 
@@ -120,7 +133,16 @@ def retrieve_context(state):
 
 
 def _select_documents(vs, question: str, top_k: int, fetch_k: int, strategy: str) -> list:
-    """Dispatch to the configured retrieval strategy (default MMR — behavior-preserving)."""
+    """Dispatch to the configured retrieval strategy.
+
+    Raises ``ValueError`` for any unknown strategy before touching the vector store
+    (FR spec 5.11 — clear error, no silent fallthrough).
+    """
+    if strategy not in _VALID_STRATEGIES:
+        raise ValueError(
+            f"Unknown retrieval strategy {strategy!r}. "
+            f"Valid values: {sorted(_VALID_STRATEGIES)}"
+        )
     if strategy in ("hybrid", "hybrid_rerank"):
         from ingest.retrieval import hybrid_retrieve, rerank
 
@@ -128,4 +150,9 @@ def _select_documents(vs, question: str, top_k: int, fetch_k: int, strategy: str
         if strategy == "hybrid_rerank":
             results = rerank(question, results, top_k)
         return results
+    if strategy == "hierarchical":
+        from ingest.retrieval import hierarchical_retrieve
+
+        return hierarchical_retrieve(vs, question, k=top_k, fetch_k=fetch_k)
+    # Default: MMR
     return vs.max_marginal_relevance_search(question, k=top_k, fetch_k=fetch_k)

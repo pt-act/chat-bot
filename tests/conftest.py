@@ -110,6 +110,67 @@ def pdf_v2_bytes():
     return _make_pdf_bytes(POLICY_V2)
 
 
+def _make_simple_pdf_bytes() -> bytes:
+    """Small PDF with two headings and a table — used as a simple.pdf fixture."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 10, "Introduction", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", size=11)
+    pdf.multi_cell(0, 8, "This document describes our product offerings and technical specifications.")
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 10, "Pricing Table", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", size=10)
+    # Render table rows as sequential cells so PyPDF extracts some text
+    for row in [("Plan", "Price", "Users"), ("Starter", "$9/mo", "5"),
+                ("Pro", "$29/mo", "25"), ("Enterprise", "$99/mo", "Unlimited")]:
+        for cell_text in row:
+            pdf.cell(60, 7, cell_text, border=1)
+        pdf.ln()
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 10, "Technical Specifications", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", size=11)
+    pdf.multi_cell(0, 8, "Requires Python 3.10+ and 8 GB RAM. Supports Linux, macOS, Windows.")
+    return bytes(pdf.output())
+
+
+def _make_multipage_table_pdf_bytes() -> bytes:
+    """PDF with a table split across two pages — used as a multipage_table.pdf fixture."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 10, "Annual Sales Report", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", size=11)
+    pdf.multi_cell(0, 8, "Regional sales figures across all quarters.")
+    pdf.ln(4)
+    # Push table to span across pages by filling first page with rows
+    pdf.set_font("Helvetica", size=10)
+    for region in ["North", "South", "Midwest", "Southeast", "Southwest",
+                   "Northwest", "Central", "Northeast"]:
+        for cell_text in (region, "$1.2M", "$1.5M"):
+            pdf.cell(60, 7, cell_text, border=1)
+        pdf.ln()
+    # Second page continues table
+    pdf.add_page()
+    for region in ["East", "West", "Pacific", "Mountain"]:
+        for cell_text in (region, "$2.1M", "$2.3M"):
+            pdf.cell(60, 7, cell_text, border=1)
+        pdf.ln()
+    return bytes(pdf.output())
+
+
+@pytest.fixture(scope="session")
+def simple_pdf_bytes():
+    return _make_simple_pdf_bytes()
+
+
+@pytest.fixture(scope="session")
+def multipage_table_pdf_bytes():
+    return _make_multipage_table_pdf_bytes()
+
+
 @pytest.fixture
 def fake_redis():
     return fakeredis.FakeRedis(decode_responses=True)

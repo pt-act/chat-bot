@@ -14,6 +14,7 @@ from db.redis_client import get_redis
 from db.vector import VectorStoreRepository, get_vectorstore
 from ingest.keys import ALL_DOCS_KEY, CONTENT_HASHES_KEY, doc_chunks_key, ingest_status_key
 from ingest.loaders import detect_extension, load_documents
+from ingest.pdf_opendataloader import build_hierarchical_chunks, load_pdf_odl
 from utils.security import SSRFError, validate_download_url
 
 logger = logging.getLogger(__name__)
@@ -104,14 +105,75 @@ def _check_duplicate_content(redis_client, new_file_hash: str, doc_id: str) -> d
     return None
 
 
+# ODL-specific metadata fields to carry through the standard chunk-processing loop
+# (so L1/L2 hierarchy and citation metadata survive into the vector store).
+_ODL_PASSTHROUGH_KEYS = frozenset({
+    "chunk_level", "section_title", "element_type",
+    "parent_chunk_id", "heading_level", "bbox", "page_end",
+})
+
+
 def _build_chunks(
-    file_path: str, doc_id: str, file_name: str, new_file_hash: str, version: str, ext: str
-) -> tuple[list[Document], set[str]]:
-    pages = load_documents(file_path, ext)
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800, chunk_overlap=100, separators=["\n\n", "\n", ".", " ", ""]
-    )
-    raw_chunks = splitter.split_documents(pages)
+    file_path: str,
+    doc_id: str,
+    file_name: str,
+    new_file_hash: str,
+    version: str,
+    ext: str,
+    parser_override: str | None = None,
+    hybrid_mode_override: str | None = None,
+    pages_override: str | None = None,
+) -> tuple[list[Document], set[str], dict]:
+    """Chunk a local file into LangChain Documents ready for vector storage.
+
+    Returns (chunks, chunk_hashes, diagnostics).  diagnostics contains FR8 ingest-status
+    fields (parser, fallback_used, page_count, element_count, parser_mode) for PDF files;
+    it is empty for non-PDF formats.
+
+    parser_override / hybrid_mode_override / pages_override carry per-request values that
+    take precedence over the deployment-level Settings defaults (FR9).
+    """
+    settings = get_settings()
+    diagnostics: dict = {}
+
+    # Decide whether to use ODL for PDF files.
+    # Per-request parser_override beats the deployment-level setting.
+    use_odl = False
+    if ext == ".pdf":
+        effective_parser = parser_override or settings.pdf_parser
+        if effective_parser == "opendataloader":
+            use_odl = True
+        elif effective_parser is None:
+            from ingest.pdf_preflight import preflight_check  # noqa: PLC0415
+
+            use_odl, _ = preflight_check()
+
+    if use_odl:
+        raw_chunks, odl_elements, diagnostics = load_pdf_odl(
+            file_path, settings,
+            pages=pages_override,
+            hybrid_mode_override=hybrid_mode_override,
+        )
+        if odl_elements:
+            l1_chunks, l2_chunks = build_hierarchical_chunks(odl_elements)
+            raw_chunks = l1_chunks + l2_chunks
+    else:
+        # For PDFs, pass "pypdf" explicitly to bypass a redundant preflight call inside
+        # load_documents() now that we have already decided above.
+        pdf_override = "pypdf" if ext == ".pdf" else None
+        pages = load_documents(file_path, ext, parser=pdf_override)
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=800, chunk_overlap=100, separators=["\n\n", "\n", ".", " ", ""]
+        )
+        raw_chunks = splitter.split_documents(pages)
+        if ext == ".pdf":
+            diagnostics = {
+                "parser": "pypdf",
+                "fallback_used": "false",
+                "page_count": str(len(pages)),
+                "element_count": str(len(raw_chunks)),
+                "parser_mode": "local",
+            }
 
     new_chunks = []
     new_hashes = set()
@@ -123,22 +185,24 @@ def _build_chunks(
 
         ch = _chunk_hash(text)
         new_hashes.add(ch)
-        new_chunks.append(
-            Document(
-                page_content=text,
-                metadata={
-                    "doc_id": doc_id,
-                    "source_file": file_name,
-                    "file_hash": new_file_hash,
-                    "chunk_hash": ch,
-                    "chunk_index": i,
-                    "page_number": raw.metadata.get("page", 0),
-                    "version": version,
-                },
-            )
-        )
+        meta: dict = {
+            "doc_id": doc_id,
+            "source_file": file_name,
+            "file_hash": new_file_hash,
+            "chunk_hash": ch,
+            "chunk_index": i,
+            "page_number": raw.metadata.get("page", 0),
+            "version": version,
+        }
+        # Pass through ODL-specific metadata (L1/L2 hierarchy, citation fields).
+        # Non-ODL chunks have none of these keys so the loop is a no-op for them.
+        for key in _ODL_PASSTHROUGH_KEYS:
+            val = raw.metadata.get(key)
+            if val is not None:
+                meta[key] = val
+        new_chunks.append(Document(page_content=text, metadata=meta))
 
-    return new_chunks, new_hashes
+    return new_chunks, new_hashes, diagnostics
 
 
 def _sync_vectorstore(
@@ -184,6 +248,7 @@ def _persist_ingest_status(
     total: int,
     version: str,
     file_name: str,
+    diagnostics: dict | None = None,
 ):
     redis_client.delete(doc_chunks_key(doc_id))
     if new_hashes:
@@ -195,22 +260,35 @@ def _persist_ingest_status(
         redis_client.hdel(CONTENT_HASHES_KEY, stored_file_hash)
     redis_client.hset(CONTENT_HASHES_KEY, new_file_hash, doc_id)
 
-    redis_client.hset(
-        ingest_status_key(doc_id),
-        mapping={
-            "file_hash": new_file_hash,
-            "file_name": file_name,
-            "version": version,
-            "status": "done",
-            "total_chunks": str(total),
-            "added": str(added),
-            "removed": str(removed),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    mapping: dict = {
+        "file_hash": new_file_hash,
+        "file_name": file_name,
+        "version": version,
+        "status": "done",
+        "total_chunks": str(total),
+        "added": str(added),
+        "removed": str(removed),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    # FR8: write parser diagnostics when available (PDF ingest only).
+    if diagnostics:
+        for key in ("parser", "fallback_used", "page_count", "element_count", "parser_mode"):
+            if key in diagnostics:
+                mapping[key] = diagnostics[key]
+
+    redis_client.hset(ingest_status_key(doc_id), mapping=mapping)
 
 
-def _run_ingest(redis_client, doc_id: str, file_name: str, file_path: str, ext: str) -> dict:
+def _run_ingest(
+    redis_client,
+    doc_id: str,
+    file_name: str,
+    file_path: str,
+    ext: str,
+    parser_override: str | None = None,
+    hybrid_mode_override: str | None = None,
+    pages_override: str | None = None,
+) -> dict:
     """Hash → dedup → chunk → sync → persist for an already-local file path.
 
     Shared by both the URL (`process_policy`) and upload (`process_uploaded`) paths.
@@ -232,7 +310,12 @@ def _run_ingest(redis_client, doc_id: str, file_name: str, file_path: str, ext: 
         return dup_result
 
     version = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    new_chunks, new_hashes = _build_chunks(file_path, doc_id, file_name, new_file_hash, version, ext)
+    new_chunks, new_hashes, diagnostics = _build_chunks(
+        file_path, doc_id, file_name, new_file_hash, version, ext,
+        parser_override=parser_override,
+        hybrid_mode_override=hybrid_mode_override,
+        pages_override=pages_override,
+    )
 
     repo = VectorStoreRepository(get_vectorstore())
     old_hashes = redis_client.smembers(doc_chunks_key(doc_id))
@@ -250,6 +333,7 @@ def _run_ingest(redis_client, doc_id: str, file_name: str, file_path: str, ext: 
         len(new_chunks),
         version,
         file_name,
+        diagnostics,
     )
 
     logger.info("Ingested %s — added=%d removed=%d total=%d", doc_id, added, removed, len(new_chunks))
@@ -275,7 +359,13 @@ def _mark_failed(redis_client, doc_id: str, error: Exception) -> None:
     )
 
 
-def process_policy(file_name: str, s3_url: str) -> dict:
+def process_policy(
+    file_name: str,
+    s3_url: str,
+    parser_override: str | None = None,
+    hybrid_mode_override: str | None = None,
+    pages_override: str | None = None,
+) -> dict:
     """Ingest a document fetched from a remote URL (SSRF-guarded).
 
     The format is inferred from the URL's extension (see ingest.loaders).
@@ -288,7 +378,12 @@ def process_policy(file_name: str, s3_url: str) -> dict:
     try:
         logger.info("Downloading %s (%s)", file_name, ext or "unknown format")
         file_path = _download_file(s3_url, ext)
-        return _run_ingest(redis_client, doc_id, file_name, file_path, ext)
+        return _run_ingest(
+            redis_client, doc_id, file_name, file_path, ext,
+            parser_override=parser_override,
+            hybrid_mode_override=hybrid_mode_override,
+            pages_override=pages_override,
+        )
     except SSRFError as e:
         logger.warning("SSRF blocked for %s: %s", doc_id, e)
         raise
@@ -301,7 +396,14 @@ def process_policy(file_name: str, s3_url: str) -> dict:
             os.remove(file_path)
 
 
-def process_uploaded(file_name: str, file_path: str, ext: str) -> dict:
+def process_uploaded(
+    file_name: str,
+    file_path: str,
+    ext: str,
+    parser_override: str | None = None,
+    hybrid_mode_override: str | None = None,
+    pages_override: str | None = None,
+) -> dict:
     """Ingest a document already saved locally (e.g. an uploaded file).
 
     No download/SSRF step — the bytes are local. ``ext`` selects the loader. The caller
@@ -311,7 +413,12 @@ def process_uploaded(file_name: str, file_path: str, ext: str) -> dict:
     redis_client = get_redis()
     try:
         logger.info("Processing uploaded document %s (%s)", file_name, ext)
-        return _run_ingest(redis_client, doc_id, file_name, file_path, ext)
+        return _run_ingest(
+            redis_client, doc_id, file_name, file_path, ext,
+            parser_override=parser_override,
+            hybrid_mode_override=hybrid_mode_override,
+            pages_override=pages_override,
+        )
     except Exception as e:
         _mark_failed(redis_client, doc_id, e)
         logger.exception("Ingest failed for uploaded %s", doc_id)

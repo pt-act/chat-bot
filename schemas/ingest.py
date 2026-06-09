@@ -1,6 +1,7 @@
 import re
+from typing import Literal
 
-from pydantic import BaseModel, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from ingest.loaders import SUPPORTED_EXTENSIONS, detect_extension, is_supported
 
@@ -38,9 +39,22 @@ def sanitize_doc_id(raw: str) -> str:
     return slug or "document"
 
 
+_PAGES_PATTERN = re.compile(r'^\d+(-\d+)?(,\d+(-\d+)?)*$')
+
+
 class IngestRequest(BaseModel):
     file_name: str
     s3_url: HttpUrl
+    # Per-request parser overrides (FR9) — all None-defaulting, backward compatible.
+    parser: Literal["pypdf", "opendataloader"] | None = Field(
+        default=None, description="Force PDF parser. Null uses auto-detect."
+    )
+    hybrid_mode: Literal["auto", "full"] | None = Field(
+        default=None, description="Hybrid routing mode override (requires ODL_HYBRID configured)."
+    )
+    pages: str | None = Field(
+        default=None, description="Page range to ingest, e.g. '1-10' or '1-5,8,12-15'."
+    )
 
     @field_validator("s3_url")
     @classmethod
@@ -54,3 +68,12 @@ class IngestRequest(BaseModel):
     @classmethod
     def safe_file_name(cls, v: str) -> str:
         return clean_file_name(v)
+
+    @field_validator("pages")
+    @classmethod
+    def validate_pages_format(cls, v: str | None) -> str | None:
+        if v is not None and not _PAGES_PATTERN.match(v):
+            raise ValueError(
+                f"pages must be a page range like '1-10' or '1-5,8,12-15' — got {v!r}"
+            )
+        return v

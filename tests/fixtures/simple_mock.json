@@ -1,0 +1,86 @@
+{
+  "number of pages": 2,
+  "kids": [
+    {
+      "type": "heading",
+      "id": 1,
+      "content": "Introduction",
+      "heading level": 1,
+      "page number": 1,
+      "bounding box": [72.0, 680.0, 540.0, 700.0]
+    },
+    {
+      "type": "paragraph",
+      "id": 2,
+      "content": "This document describes our product offerings and technical specifications.",
+      "page number": 1,
+      "bounding box": [72.0, 650.0, 540.0, 672.0]
+    },
+    {
+      "type": "heading",
+      "id": 3,
+      "content": "Pricing Table",
+      "heading level": 2,
+      "page number": 1,
+      "bounding box": [72.0, 618.0, 540.0, 638.0]
+    },
+    {
+      "type": "table",
+      "id": 4,
+      "page number": 1,
+      "bounding box": [72.0, 555.0, 540.0, 614.0],
+      "rows": [
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "Plan",       "id": 100, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "Price",      "id": 101, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "Users",      "id": 102, "page number": 1}]}
+          ]
+        },
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "Starter",    "id": 103, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "$9/mo",      "id": 104, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "5",          "id": 105, "page number": 1}]}
+          ]
+        },
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "Pro",        "id": 106, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "$29/mo",     "id": 107, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "25",         "id": 108, "page number": 1}]}
+          ]
+        },
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "Enterprise", "id": 109, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "$99/mo",     "id": 110, "page number": 1}]},
+            {"kids": [{"type": "paragraph", "content": "Unlimited",  "id": 111, "page number": 1}]}
+          ]
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "id": 5,
+      "content": "Technical Specifications",
+      "heading level": 2,
+      "page number": 2,
+      "bounding box": [72.0, 680.0, 540.0, 700.0]
+    },
+    {
+      "type": "paragraph",
+      "id": 6,
+      "content": "The system requires Python 3.10 or later and a minimum of 8 GB RAM.",
+      "page number": 2,
+      "bounding box": [72.0, 648.0, 540.0, 668.0]
+    },
+    {
+      "type": "paragraph",
+      "id": 7,
+      "content": "Supported platforms include Linux, macOS, and Windows Server 2022.",
+      "page number": 2,
+      "bounding box": [72.0, 618.0, 540.0, 638.0]
+    }
+  ]
+}

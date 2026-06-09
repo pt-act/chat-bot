@@ -7,6 +7,7 @@ can decide whether to proceed with ODL or fall back to PyPDF.
 import logging
 import re
 import subprocess
+from urllib.parse import urlparse
 
 import requests
 
@@ -80,17 +81,32 @@ def _odl_importable() -> tuple[bool, str]:
 
 
 def _hybrid_reachable(url: str | None) -> tuple[bool, str]:
-    """Check the hybrid sidecar server is reachable.
+    """Check the hybrid sidecar server is reachable via its ``/health`` endpoint.
 
     Returns ``(ok, reason)`` — ok is ``True`` when no URL is configured
-    (nothing to validate) or when the health endpoint responds 2xx.
+    (nothing to validate) or when ``GET {url}/health`` responds 2xx.
+
+    Validates the URL scheme (must be http/https) before any network access
+    to guard against SSRF via misconfigured ODL_HYBRID_URL (FR 7.9).
     """
     if not url:
         return True, ""
+
+    # FR 7.9: Validate scheme before any network call.
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, (
+            f"ODL_HYBRID_URL must use http:// or https:// — got scheme {parsed.scheme!r}"
+        )
+    # Reject credentials in the netloc (e.g. user@host style SSRF pivot attempts).
+    if "@" in (parsed.netloc or ""):
+        return False, f"ODL_HYBRID_URL must not contain credentials: {url!r}"
+
+    health_url = url.rstrip("/") + "/health"
     try:
-        resp = requests.get(url, timeout=3)
+        resp = requests.get(health_url, timeout=3)
         if resp.status_code < 200 or resp.status_code >= 300:
-            return False, f"Hybrid server at {url} returned HTTP {resp.status_code}"
+            return False, f"Hybrid server health check at {health_url} returned HTTP {resp.status_code}"
     except requests.RequestException as exc:
         return False, f"Hybrid server at {url} is unreachable: {exc}"
     return True, ""

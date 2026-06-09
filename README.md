@@ -468,6 +468,105 @@ curl -X DELETE http://127.0.0.1:8000/api/v1/ingest/terms_conditions
 > Ingest management endpoints honor API-key auth — `DELETE` always requires `X-API-Key`,
 > and the others require it when `REQUIRE_AUTH_FOR_INGEST=true`.
 
+### Per-request parser override
+
+Force a specific parser for a single request without changing deployment defaults:
+
+```bash
+# Force PyPDF even when ODL is the default
+curl -X POST "http://127.0.0.1:8000/api/v1/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{"file_name": "report", "s3_url": "https://host/report.pdf", "parser": "pypdf"}'
+
+# Ingest specific pages only (e.g., pages 1–10 of a large document)
+curl -X POST "http://127.0.0.1:8000/api/v1/ingest/upload" \
+  -F "file=@/path/to/large.pdf" -F "pages=1-10"
+```
+
+Valid values: `parser` ∈ `pypdf` | `opendataloader` | `null` (auto-detect). `pages` accepts ranges like `1-10` or `1-5,8,12-15`.
+
+---
+
+### OpenDataLoader PDF Parser (optional — requires Java 11+)
+
+By default, chat-bot uses [PyPDF](https://pypdf.readthedocs.io) for PDF text extraction. When **Java 11+** is present and the `opendataloader_pdf` Python package is installed, it automatically switches to **OpenDataLoader (ODL)**, which preserves document structure:
+
+| Feature | PyPDF (baseline) | ODL |
+|---------|-----------------|-----|
+| Table structure | Lost (raw text) | Markdown pipe tables |
+| Heading hierarchy | Lost | `#`/`##` headings |
+| Section metadata | None | `section_title` on every chunk |
+| L1/L2 chunk granularity | Flat | Section-level L1 + element-level L2 |
+| Scanned PDF (OCR) | Not supported | Supported via hybrid sidecar |
+
+#### Requirements
+
+1. **Java 11+** on the server's `$PATH` — ODL's conversion engine runs in the JVM.
+2. **`opendataloader_pdf` Python package** installed in the same environment:
+   ```bash
+   pip install opendataloader-pdf
+   ```
+3. For OCR/scanned PDF support (optional): `opendataloader-pdf[hybrid]` + the hybrid sidecar (see below).
+
+#### Auto-detection and fallback
+
+No config change required. On every PDF ingest:
+- If Java 11+ is detected **and** `opendataloader_pdf` is importable → ODL is used.
+- If Java is absent **or** ODL fails → PyPDF is used as fallback (controlled by `PDF_PARSER_FALLBACK`, default `true`).
+- Force a specific parser globally with `PDF_PARSER=pypdf` or `PDF_PARSER=opendataloader`.
+
+The ingest status endpoint reports which parser was used:
+```bash
+curl http://127.0.0.1:8000/api/v1/ingest/status/my_doc
+# → {"doc_id": "my_doc", "status": "done", "parser": "opendataloader", "parser_mode": "local", ...}
+```
+
+#### ODL configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PDF_PARSER` | _(auto)_ | Force `pypdf` or `opendataloader`; `null` = auto-detect |
+| `PDF_PARSER_FALLBACK` | `true` | Fall back to PyPDF when ODL fails |
+| `ODL_FORMAT` | `json,markdown` | ODL output formats; `json` enables L1/L2 chunking |
+| `ODL_READING_ORDER` | `xycut` | Reading-order algorithm passed to ODL |
+| `RETRIEVAL_STRATEGY` | `mmr` | Set to `hierarchical` to activate L1/L2-aware retrieval |
+
+#### Hierarchical retrieval
+
+Set `RETRIEVAL_STRATEGY=hierarchical` in `.env` to activate element-type-aware retrieval:
+- Table-like queries (`compare`, `table`, `vs.`) → table chunks boosted to the front.
+- Overview queries (`overview`, `summary`, `what is`) → L1 section chunks preferred.
+- L2 results are expanded to their L1 parent when context improves groundedness.
+
+#### Hybrid mode (scanned PDFs, formula extraction)
+
+The `odl-hybrid` sidecar enables OCR for scanned PDFs and LaTeX/chart enrichment.
+Start it with Docker Compose:
+
+```bash
+docker compose --profile hybrid up
+```
+
+Then set in `.env`:
+```env
+ODL_HYBRID=docling-fast
+ODL_HYBRID_URL=http://odl-hybrid:5002  # default when using docker-compose
+ODL_HYBRID_FALLBACK=false              # true to fall back to local Java if sidecar is unreachable
+```
+
+For formula/picture enrichment (requires `ODL_HYBRID_MODE=full`):
+```env
+ODL_HYBRID_MODE=full
+ODL_ENRICH_FORMULA=true   # extract LaTeX strings from formula elements
+ODL_ENRICH_PICTURES=true  # generate text descriptions of chart/image elements
+```
+
+> **Security**: Never expose the `odl-hybrid` container port externally. It is accessible only on the internal Docker network. `ODL_HYBRID_URL` must be an `http://` or `https://` URL pointing to a trusted internal host.
+
+For troubleshooting, see `docs/odl-operator-guide.md`.
+
+---
+
 ### Review synthesized answers (learning-mode two-phase ingest)
 
 ```bash
@@ -1000,7 +1099,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history, detailed changes, and the 
 
 This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-bot`](https://github.com/hasandeveloper/chat-bot) with significant enhancements:
 
-| Dimension | Upstream (v1.0.0) | This Fork (v2.4.0) |
+| Dimension | Upstream (v1.0.0) | This Fork (v2.5.0) |
 |-----------|--------------------|---------------------|
 | LLM providers | 3 (OpenAI, Anthropic, Groq) | 14 (universal adapter) |
 | Chat modes | 1 (strict only) | 4 (strict, open, learning, learning_review) |
@@ -1010,7 +1109,12 @@ This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-
 | Provider failures | Fail the turn | Retry transient 429/5xx with backoff + circuit breaker |
 | Ingestion durability | In-process `BackgroundTasks` | Optional durable Redis queue + worker (survives restarts, retries) |
 | Persona / branding | Hard-coded "our company" | Configurable name / domain / refusal copy (defaults unchanged) |
-| Retrieval strategy | Dense MMR | Dense MMR + optional hybrid (BM25 + RRF) |
+| PDF parser | PyPDF (flat text) | Auto-selects OpenDataLoader when Java 11+ present; Markdown-structured output, L1/L2 hierarchical chunking, multi-page table merge; fallback to PyPDF |
+| Retrieval strategy | Dense MMR | Dense MMR + optional hybrid (BM25 + RRF) + **hierarchical** (L1/L2-aware: table-query boost, overview L1 preference, L2→L1 context expansion) |
+| Citation metadata | page + snippet | + section title, element type, page range, bounding box (ODL chunks); null for legacy chunks — non-breaking |
+| Scanned PDF / OCR | Not supported | Via `odl-hybrid` sidecar (Docling/EasyOCR) — `docker compose --profile hybrid up` |
+| Formula / picture enrichment | None | LaTeX extraction + SmolVLM chart descriptions via hybrid enrichment flags |
+| Per-request parser override | None | `parser`, `hybrid_mode`, `pages` fields on ingest request (backward compatible) |
 | Self-ingestion | None | Learning mode with quality gate + two-phase review (`learning_review`: queued for human approve/reject before embedding) |
 | Languages | 2 (English / Arabic) | 3 (English / Arabic / European Portuguese) + hybrid auto-detection (script + diacritic/stopword heuristic + lingua fallback) |
 | Document formats | PDF only | PDF / TXT / Markdown / DOCX / HTML (pluggable loader registry) |
@@ -1018,8 +1122,8 @@ This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-
 | HTTP API | Unversioned `/api/*` | Versioned `/api/v1` (typed envelopes) + RFC 9457 `problem+json` errors |
 | Streaming | None | SSE token streaming (`POST /api/v1/chat/stream`) |
 | Guardrails | None | Input prompt-injection blocking + output PII masking / length cap |
-| Evaluation | None | RAGAS offline harness (faithfulness / relevancy / context precision+recall) |
-| Web client | None | Vite + React + TypeScript SPA with production UX: streaming with smart autoscroll, markdown + Shiki highlighting, trust signals (confidence badges, citation cards with score meters, mode/provenance chips), strict-mode refusal CTA, suggested prompt chips, inline 👍/👎 feedback, conversation export (JSON/Text), new-chat rotation, rate-limit countdown, health badge with `/ready` probe, `sessionStorage` persistence, RTL/Arabic, deferred screen-reader announcements, `prefers-reduced-motion`, keyboard navigation |
+| Evaluation | None | RAGAS offline harness + ODL offline eval harness (table quality, section metadata, element granularity) |
+| Web client | None | Vite + React + TypeScript SPA with production UX: streaming with smart autoscroll, markdown + Shiki highlighting, trust signals (confidence badges, ODL-enriched citation cards with section/element-type/page-range/bbox, mode/provenance chips), strict-mode refusal CTA, suggested prompt chips, inline 👍/👎 feedback, conversation export (JSON/Text), new-chat rotation, rate-limit countdown, health badge with `/ready` probe, `sessionStorage` persistence, RTL/Arabic, deferred screen-reader announcements, `prefers-reduced-motion`, keyboard navigation |
 | Authentication | None | API key (FastAPI DI) |
 | SSRF protection | None | Private IP + metadata blocking |
 | Rate limiting | Direct IP only | Proxy-aware (CIDR, X-Forwarded-For) |
@@ -1027,7 +1131,7 @@ This repository (`pt-act/chat-bot`) is a hardened fork of [`hasandeveloper/chat-
 | Logging | Text only | Text + JSON (structured) |
 | Health probes | `/health` (static) | `/health` (cached) + `/ready` (live) |
 | CI/CD | Basic (ruff + pytest) | Full (ruff + bandit + pip-audit + coverage + Docker) |
-| Test count | ~10 | 300+ (97% coverage) + hermetic retrieval-regression |
+| Test count | ~10 | 300+ (97% coverage) + hermetic retrieval-regression + ODL spec suite (243 Python + 18 TS) |
 | Audit score | 72/100 (C+) | 95/100 (A+) |
 | Local deployment | None | docker-compose.local.yml (Ollama + FastEmbed) |
 

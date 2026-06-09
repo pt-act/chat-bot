@@ -289,7 +289,138 @@ Serve `dist/` from any static host; configure `CORS_ORIGINS` or reverse-proxy `/
 
 ---
 
-## 10. Tips
+## 10. Structured PDF ingestion (OpenDataLoader)
+
+When the server has Java 11+ and `opendataloader_pdf` installed, PDF ingestion automatically
+upgrades from plain text extraction to **document understanding** — tables, headings, and
+lists survive as structured Markdown, and every chunk carries rich section and element
+metadata. You do not need to change anything to benefit; the server switches parsers
+transparently.
+
+### What improves
+
+| What you had with PyPDF | What you get with ODL |
+|--------------------------|----------------------|
+| Table content arrives as garbled raw text | Tables become Markdown pipe tables (`\| Plan \| Price \| Users \|`) |
+| No section context in citations | Every citation carries the heading it came from (`"section": "Pricing Table"`) |
+| All chunks equally ranked | Table-like queries boost table chunks; overview queries surface section summaries |
+| One flat chunk per page slice | Hierarchical L1 (section) + L2 (element) chunks with parent links |
+
+### Richer citations
+
+When a document was ingested with ODL you will see four extra fields on each citation:
+
+```json
+{
+  "label": "annual_report.pdf",
+  "page": 3,
+  "snippet": "Starter plan costs $9/mo for up to 5 users.",
+  "section": "Pricing Table",
+  "element_type": "table",
+  "page_end": 4,
+  "bbox": [72.0, 555.0, 540.0, 614.0]
+}
+```
+
+| Field | What it means |
+|-------|--------------|
+| `section` | The heading that contains this chunk — helps you navigate to the right place in the document. |
+| `element_type` | What kind of content it is: `paragraph`, `table`, `list`, `formula`, `picture`, or `section` (for an L1 summary chunk). |
+| `page_end` | The last page for multi-page elements (e.g. a table that spans pages 3–4). |
+| `bbox` | Bounding box `[left, bottom, right, top]` in PDF points — useful for highlight-in-PDF UIs. |
+
+All four fields are `null` for non-ODL documents; existing clients ignore `null` values.
+
+The **web client citation card** shows these automatically: a section title appears below the
+document name, an element-type badge appears for non-paragraph types (`table`, `formula`, etc.),
+and the page display becomes `pp. 3–4` for multi-page elements.
+
+### Checking which parser was used
+
+```bash
+curl http://127.0.0.1:8000/api/v1/ingest/status/my_doc
+```
+
+```json
+{
+  "doc_id": "my_doc",
+  "status": "done",
+  "parser": "opendataloader",
+  "fallback_used": "false",
+  "parser_mode": "local",
+  "page_count": "12",
+  "element_count": "47"
+}
+```
+
+`parser` will be `opendataloader` when ODL ran, `pypdf` when it fell back. `fallback_used`
+is `"true"` if ODL failed and PyPDF was substituted automatically.
+
+### Per-request parser override
+
+Force a specific parser for a single document without changing server defaults:
+
+```bash
+# Force PyPDF for this document only
+curl -X POST http://127.0.0.1:8000/api/v1/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"file_name":"report","s3_url":"https://example.com/report.pdf","parser":"pypdf"}'
+
+# Force ODL even if it is not the global default
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/upload \
+  -F "file=@/path/to/report.pdf" -F "parser=opendataloader"
+```
+
+Valid values: `"pypdf"`, `"opendataloader"`, or omit for auto-detect. Sending an unknown
+value returns `422`.
+
+### Ingesting a page range
+
+For large documents where only part is relevant:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/upload \
+  -F "file=@/path/to/annual_report.pdf" -F "pages=10-25"
+
+# Multiple ranges
+-F "pages=1-5,8,12-20"
+```
+
+The `pages` field is passed straight to ODL's conversion engine and limits which pages are
+processed. It is validated against the pattern `\d+(-\d+)?(,\d+(-\d+)?)*` — any other
+format returns `422`.
+
+### Better retrieval for structured documents
+
+If the server has `RETRIEVAL_STRATEGY=hierarchical`, your questions automatically get routed
+to the most relevant chunk type:
+
+| Query type | Example | What the bot retrieves |
+|------------|---------|------------------------|
+| Table-like | "compare the pricing plans" / "show me the table" | Table element chunks boosted first |
+| Overview | "summarize the introduction" / "what is this about" | Section-level L1 chunks preferred |
+| General | Everything else | Standard similarity ranking |
+
+You do not need to phrase your questions differently — the routing happens automatically.
+
+### Scanned PDFs (OCR)
+
+If the operator has started the hybrid sidecar (`docker compose --profile hybrid up`), PDFs
+that could not be extracted by the standard Java engine (scanned documents, image-only PDFs)
+are processed through an AI OCR backend. From your perspective the ingest works identically —
+check the status endpoint; `parser_mode` will be `hybrid` instead of `local`.
+
+To request hybrid mode for a single upload even when it is not the server default (requires
+the operator to have the sidecar running):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/upload \
+  -F "file=@/path/to/scanned_invoice.pdf" -F "hybrid_mode=full"
+```
+
+---
+
+## 11. Tips
 
 - **Quote sources** in your UI using the `sources[]` objects — they make answers
   verifiable; pair them with `meta.grounded` for an honest confidence indicator.

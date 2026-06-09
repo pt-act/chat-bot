@@ -58,6 +58,31 @@ services:
       - app-network
     restart: unless-stopped
 
+  # OpenDataLoader hybrid OCR/AI backend — started only with `--profile hybrid`.
+  # Enables scanned-PDF ingest via Docling/EasyOCR and formula/picture enrichment.
+  # Set ODL_HYBRID=docling-fast and ODL_HYBRID_URL=http://odl-hybrid:5002 in .env to activate.
+  odl-hybrid:
+    image: python:3.12-slim
+    command: >
+      sh -c "pip install --quiet 'opendataloader-pdf[hybrid]' &&
+             opendataloader-pdf-hybrid --port 5002"
+    # No external port — accessible only on the internal app-network (FR 7.10).
+    environment:
+      - ODL_HYBRID_OCR_LANG=${ODL_HYBRID_OCR_LANG:-}
+      - ODL_HYBRID_FORCE_OCR=${ODL_HYBRID_FORCE_OCR:-false}
+      - ODL_HYBRID_DEVICE=${ODL_HYBRID_DEVICE:-cpu}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - app-network
+    restart: unless-stopped
+    profiles:
+      - hybrid
+
 volumes:
   redis_data:
   ingest_incoming:

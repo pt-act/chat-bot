@@ -34,6 +34,28 @@ services:
       - app-network
     restart: unless-stopped
 
+  # ODL hybrid sidecar — enable with: docker compose --profile hybrid -f docker-compose.test.yml up
+  # CI uses mock ODL JSON output; this service is only needed for manual end-to-end hybrid tests.
+  odl-hybrid:
+    image: python:3.12-slim
+    command: >
+      sh -c "pip install --quiet 'opendataloader-pdf[hybrid]' &&
+             opendataloader-pdf-hybrid --port 5002"
+    environment:
+      - ODL_HYBRID_OCR_LANG=${ODL_HYBRID_OCR_LANG:-}
+      - ODL_HYBRID_FORCE_OCR=${ODL_HYBRID_FORCE_OCR:-false}
+      - ODL_HYBRID_DEVICE=${ODL_HYBRID_DEVICE:-cpu}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - app-network
+    profiles:
+      - hybrid
+
 volumes:
   redis_data:
 

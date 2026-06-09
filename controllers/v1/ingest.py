@@ -2,7 +2,9 @@
 
 import logging
 import os
+import re
 import tempfile
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile
 
@@ -21,6 +23,7 @@ router = APIRouter(tags=["ingest"])
 
 _PDF_MAGIC = b"%PDF-"
 _UPLOAD_READ_CHUNK = 1024 * 1024  # 1 MiB
+_PAGES_RE = re.compile(r'^\d+(-\d+)?(,\d+(-\d+)?)*$')
 
 
 @router.post(
@@ -49,16 +52,20 @@ def ingest(request: IngestRequest, background: BackgroundTasks, response: Respon
         # Durable path (#4): a worker process picks the job up, surviving API restarts.
         from ingest.queue import enqueue
 
-        enqueue(
-            {
-                "kind": "url",
-                "file_name": request.file_name,
-                "s3_url": str(request.s3_url),
-                "ext": detect_extension(str(request.s3_url)),
-            }
-        )
+        enqueue({
+            "kind": "url",
+            "file_name": request.file_name,
+            "s3_url": str(request.s3_url),
+            "ext": detect_extension(str(request.s3_url)),
+            "parser": request.parser,
+            "hybrid_mode": request.hybrid_mode,
+            "pages": request.pages,
+        })
     else:
-        background.add_task(ingest_file, request.file_name, str(request.s3_url))
+        background.add_task(
+            ingest_file, request.file_name, str(request.s3_url),
+            request.parser, request.hybrid_mode, request.pages,
+        )
     response.headers["Location"] = f"/api/v1/ingest/status/{doc_id}"
     logger.info("Queued ingest for %s (mode=%s)", doc_id, settings.ingest_mode)
     return IngestResult(doc_id=doc_id, status="queued")
@@ -124,7 +131,21 @@ def ingest_upload(
     file_name: str | None = Form(
         default=None, description="Optional doc id. Defaults to a sanitized form of the uploaded filename."
     ),
+    parser: Literal["pypdf", "opendataloader"] | None = Form(
+        default=None, description="Force PDF parser. Null uses auto-detect."
+    ),
+    hybrid_mode: Literal["auto", "full"] | None = Form(
+        default=None, description="Hybrid routing mode override (requires ODL_HYBRID configured)."
+    ),
+    pages: str | None = Form(
+        default=None, description="Page range to ingest, e.g. '1-10' or '1-5,8,12-15'."
+    ),
 ) -> IngestResult:
+    if pages is not None and not _PAGES_RE.match(pages):
+        raise HTTPException(
+            status_code=422,
+            detail=f"pages must be a page range like '1-10' or '1-5,8,12-15' — got {pages!r}",
+        )
     ext = detect_extension(file.filename or "")
     if ext not in SUPPORTED_EXTENSIONS:
         allowed = ", ".join(sorted(SUPPORTED_EXTENSIONS))
@@ -159,9 +180,17 @@ def ingest_upload(
     if queue_mode:
         from ingest.queue import enqueue
 
-        enqueue({"kind": "upload", "file_name": doc_id, "file_path": file_path, "ext": ext})
+        enqueue({
+            "kind": "upload",
+            "file_name": doc_id,
+            "file_path": file_path,
+            "ext": ext,
+            "parser": parser,
+            "hybrid_mode": hybrid_mode,
+            "pages": pages,
+        })
     else:
-        background.add_task(ingest_local_file, doc_id, file_path, ext)
+        background.add_task(ingest_local_file, doc_id, file_path, ext, parser, hybrid_mode, pages)
     response.headers["Location"] = f"/api/v1/ingest/status/{doc_id}"
     logger.info("Queued uploaded ingest for %s (%s, mode=%s)", doc_id, ext, settings.ingest_mode)
     return IngestResult(doc_id=doc_id, status="queued")

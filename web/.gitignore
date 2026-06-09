@@ -3,3 +3,10 @@ dist/
 *.log
 .vite/
 *.tsbuildinfo
+
+# Playwright e2e test artifacts
+test-results/
+playwright-report/
+playwright/.cache/
+e2e/screenshots/
+e2e/videos/

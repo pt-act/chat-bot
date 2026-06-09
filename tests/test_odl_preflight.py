@@ -148,16 +148,20 @@ class TestLoadPdfDispatch:
         assert len(docs) >= 1
         assert any("Return Policy" in d.page_content for d in docs)
 
-    def test_odl_parser_stub_raises(self, pdf_v1_bytes):
-        """parser='opendataloader' hits the Group-2 stub and raises."""
+    def test_odl_parser_calls_load_pdf_odl(self, pdf_v1_bytes):
+        """parser='opendataloader' delegates to load_pdf_odl."""
         import tempfile
+
+        from langchain_core.documents import Document
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(pdf_v1_bytes)
             path = f.name
 
-        with pytest.raises(NotImplementedError, match="Group 2"):
-            load_documents(path, ".pdf", parser="opendataloader")
+        mock_doc = Document(page_content="ODL content | table", metadata={"parser": "opendataloader"})
+        with patch("ingest.loaders.load_pdf_odl", return_value=([mock_doc], [], {})):
+            docs = load_documents(path, ".pdf", parser="opendataloader")
+        assert docs == [mock_doc]
 
     def test_auto_detect_preflight_fails_fallback_to_pypdf(self, pdf_v1_bytes):
         """When parser=None and preflight fails, PyPDFLoader is used."""
@@ -172,18 +176,24 @@ class TestLoadPdfDispatch:
         assert len(docs) >= 1
         assert any("Return Policy" in d.page_content for d in docs)
 
-    def test_auto_detect_preflight_ok_stub_raises(self, pdf_v1_bytes):
-        """When parser=None and preflight passes, ODL stub is hit (Group 2)."""
+    def test_auto_detect_preflight_ok_calls_odl(self, pdf_v1_bytes):
+        """When parser=None and preflight passes, load_pdf_odl is called."""
         import tempfile
+
+        from langchain_core.documents import Document
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(pdf_v1_bytes)
             path = f.name
 
-        with patch("ingest.pdf_preflight._java_available", return_value=(True, "")):
-            with patch("ingest.pdf_preflight._odl_importable", return_value=(True, "")):
-                with pytest.raises(NotImplementedError, match="Group 2"):
-                    load_documents(path, ".pdf", parser=None)
+        mock_doc = Document(page_content="ODL content | table", metadata={"parser": "opendataloader"})
+        with (
+            patch("ingest.pdf_preflight._java_available", return_value=(True, "")),
+            patch("ingest.pdf_preflight._odl_importable", return_value=(True, "")),
+            patch("ingest.loaders.load_pdf_odl", return_value=([mock_doc], [], {})),
+        ):
+            docs = load_documents(path, ".pdf", parser=None)
+        assert docs == [mock_doc]
 
     def test_invalid_parser_value_raises(self, pdf_v1_bytes):
         import tempfile

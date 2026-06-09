@@ -54,9 +54,10 @@ class Settings(BaseSettings):
     # Chunks below this score are discarded — if none pass, the bot replies with
     # "I don't have information about that" instead of hallucinating from weak matches.
     retrieval_score_threshold: float = 0.3
-    # Retrieval strategy for above-threshold lookups. `mmr` (default) preserves today's
-    # behavior; `hybrid` fuses dense + BM25 lexical via RRF; `hybrid_rerank` adds a reranker.
-    retrieval_strategy: str = "mmr"  # mmr | hybrid | hybrid_rerank
+    # Retrieval strategy for above-threshold lookups.
+    # mmr (default) — maximal marginal relevance; hybrid — dense + BM25/RRF;
+    # hybrid_rerank — hybrid + reranker hook; hierarchical — L1/L2-aware with heuristics.
+    retrieval_strategy: str = "mmr"  # mmr | hybrid | hybrid_rerank | hierarchical
 
     # Context-aware query rewriting (#1) — condense follow-ups into a standalone search
     # query using the rolling summary + recent turns before retrieval. First turn skips it.
@@ -190,6 +191,17 @@ class Settings(BaseSettings):
         """Warn when permissive CORS is configured."""
         if "*" in self.cors_origins:
             logger.warning("CORS_ORIGINS contains '*'. This allows any origin to access the API.")
+        return self
+
+    @model_validator(mode="after")
+    def check_retrieval_strategy(self):
+        """Validate RETRIEVAL_STRATEGY value."""
+        valid = {"mmr", "hybrid", "hybrid_rerank", "hierarchical"}
+        if self.retrieval_strategy not in valid:
+            allowed = ", ".join(f"'{s}'" for s in sorted(valid))
+            raise ValueError(
+                f"RETRIEVAL_STRATEGY must be one of {allowed} — got '{self.retrieval_strategy}'"
+            )
         return self
 
     @model_validator(mode="after")

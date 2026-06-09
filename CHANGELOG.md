@@ -6,6 +6,77 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ---
 
+## [2.5.0] — 2026-06-06
+
+OpenDataLoader Full Leverage: three-track PDF pipeline upgrade from text-extraction to
+document understanding. All changes are additive and backward-compatible — PyPDF remains
+the fallback; no existing behavior changes unless ODL env vars are set.
+
+### Added
+
+#### Track 1 — Markdown content (Groups 1–2)
+
+- **`ingest/pdf_preflight.py`** — preflight checks for Java 11+, `opendataloader_pdf`
+  importability, and hybrid sidecar reachability. Returns `(ok, reason)`, never raises.
+- **`ingest/pdf_opendataloader.py`** — ODL adapter: calls `opendataloader_pdf.convert()`
+  in a scoped temp dir (always cleaned up), reads the Markdown output, splits with
+  `RecursiveCharacterTextSplitter`. Falls back to PyPDF when `PDF_PARSER_FALLBACK=true`.
+  Ingest status gains five FR8 fields: `parser`, `fallback_used`, `page_count`,
+  `element_count`, `parser_mode`.
+- `PDF_PARSER`, `PDF_PARSER_FALLBACK`, `ODL_FORMAT`, `ODL_READING_ORDER` config vars.
+
+#### Track 2 — Structural chunking + hierarchical retrieval (Groups 3–6)
+
+- **JSON tree walker** (`walk_tree`, `OdlElement`) — depth-first traversal of the ODL JSON
+  document; propagates `section_title` to every non-heading element.
+- **Multi-page table merger** (`merge_tables`) — chains table fragments linked by
+  `next table id` into single logical elements spanning their full page range.
+- **Hierarchical chunk builder** (`build_hierarchical_chunks`) — L1 section chunks (one
+  per heading section) and L2 element chunks (one per leaf element) with referential
+  integrity via `parent_chunk_id`.
+- **`hierarchical` retrieval strategy** (`ingest/retrieval.py:hierarchical_retrieve`) —
+  element-type heuristics (table boost, overview L1 preference) and inline L2→L1 context
+  expansion. Added to `_select_documents()` dispatch; unknown strategy values now raise
+  `ValueError` before any DB call.
+- **Extended `Source` schema** — four new optional fields: `section`, `element_type`,
+  `page_end`, `bbox`. All `None` for non-ODL chunks; old clients receiving `null` are
+  unaffected.
+- **Per-request parser override** (FR9) — `IngestRequest` and the upload form accept
+  `parser`, `hybrid_mode`, `pages` overrides threaded through the full pipeline to
+  `opendataloader_pdf.convert()`. The `pages` value is validated against
+  `^\d+(-\d+)?(,\d+(-\d+)?)*$` before the subprocess call.
+- `RETRIEVAL_STRATEGY=hierarchical`, `_snippet()` heading-skip for L1 chunks.
+
+#### Track 3 — Hybrid OCR + enrichment (Groups 7–8)
+
+- **`odl-hybrid` sidecar** — `docker-compose.yml`, `docker-compose.local.yml`,
+  `docker-compose.test.yml` gain an `odl-hybrid` service (Python + `opendataloader-pdf[hybrid]`,
+  port 5002, `profiles: ["hybrid"]`). No external port exposed.
+- **Hybrid URL security** — `_hybrid_reachable()` validates scheme (http/https only),
+  rejects credentials in the netloc, and calls `{url}/health`.
+- **Enrichment support** — `formula` and `picture` element types handled by `_extract_content()`;
+  `ODL_ENRICH_FORMULA` / `ODL_ENRICH_PICTURES` passed to `convert()` when hybrid is active.
+  Both flags require `ODL_HYBRID_MODE=full` (validated at startup).
+
+#### Frontend + docs (Groups 9–11)
+
+- **Citation card** (`web/src/components/CitationCards.tsx`) — shows section title, element
+  type badge, multi-page range, and collapsible bbox debug view when ODL fields are present.
+  Renders cleanly when fields are absent.
+- **`docs/odl-operator-guide.md`** — troubleshooting guide: Java not found, hybrid server
+  not starting, enrichment issues, manual PyPDF fallback, full env var reference.
+- Integration test fixtures (`tests/fixtures/`), offline eval harness (`eval/pdf_comparison.py`),
+  vitest citation card tests (`web/src/test/CitationCards.test.tsx`).
+
+### Changed
+
+- `_select_documents()` now rejects unknown `RETRIEVAL_STRATEGY` values with a `ValueError`
+  before touching the vector store (was silently falling through to MMR).
+- `ingest/retrieval.py` module docstring updated to describe all four strategies.
+- `.env.example` ODL section expanded with defaults, inline comments, and hybrid sidecar docs.
+
+---
+
 ## [2.4.0] — 2026-05-31
 
 Quality, trust, and reliability release implementing the top-5 proposals plus four

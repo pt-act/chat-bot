@@ -7,6 +7,11 @@ export interface Source {
   score?: number | null;
   page?: number | null;
   snippet?: string | null;
+  // ODL-enriched citation fields (FR7) — absent for non-ODL chunks; old clients ignore nulls.
+  section?: string | null;
+  element_type?: string | null;
+  page_end?: number | null;
+  bbox?: number[] | null;
 }
 
 export type Groundedness = "supported" | "partial" | "unsupported";

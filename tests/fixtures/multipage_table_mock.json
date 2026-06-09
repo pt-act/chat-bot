@@ -1,0 +1,73 @@
+{
+  "number of pages": 4,
+  "kids": [
+    {
+      "type": "heading",
+      "id": 1,
+      "content": "Annual Sales Report",
+      "heading level": 1,
+      "page number": 1,
+      "bounding box": [72.0, 680.0, 540.0, 700.0]
+    },
+    {
+      "type": "paragraph",
+      "id": 2,
+      "content": "The following table shows regional sales figures across all quarters.",
+      "page number": 1,
+      "bounding box": [72.0, 650.0, 540.0, 670.0]
+    },
+    {
+      "type": "table",
+      "id": 3,
+      "page number": 3,
+      "next table id": 4,
+      "bounding box": [72.0, 100.0, 540.0, 700.0],
+      "rows": [
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "Region", "id": 200, "page number": 3}]},
+            {"kids": [{"type": "paragraph", "content": "Q1",     "id": 201, "page number": 3}]},
+            {"kids": [{"type": "paragraph", "content": "Q2",     "id": 202, "page number": 3}]}
+          ]
+        },
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "North",  "id": 203, "page number": 3}]},
+            {"kids": [{"type": "paragraph", "content": "$1.2M",  "id": 204, "page number": 3}]},
+            {"kids": [{"type": "paragraph", "content": "$1.5M",  "id": 205, "page number": 3}]}
+          ]
+        },
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "South",  "id": 206, "page number": 3}]},
+            {"kids": [{"type": "paragraph", "content": "$0.9M",  "id": 207, "page number": 3}]},
+            {"kids": [{"type": "paragraph", "content": "$1.1M",  "id": 208, "page number": 3}]}
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 4,
+      "page number": 4,
+      "previous table id": 3,
+      "bounding box": [72.0, 400.0, 540.0, 700.0],
+      "rows": [
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "East",   "id": 209, "page number": 4}]},
+            {"kids": [{"type": "paragraph", "content": "$2.1M",  "id": 210, "page number": 4}]},
+            {"kids": [{"type": "paragraph", "content": "$2.3M",  "id": 211, "page number": 4}]}
+          ]
+        },
+        {
+          "cells": [
+            {"kids": [{"type": "paragraph", "content": "West",   "id": 212, "page number": 4}]},
+            {"kids": [{"type": "paragraph", "content": "$1.8M",  "id": 213, "page number": 4}]},
+            {"kids": [{"type": "paragraph", "content": "$2.0M",  "id": 214, "page number": 4}]}
+          ]
+        }
+      ]
+    }
+  ]
+}
