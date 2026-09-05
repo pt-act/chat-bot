@@ -493,6 +493,27 @@ class TestLLMAdapterEdgeCases:
             get_llm()
             mock_cls.assert_called_once()
 
+    @patch("utils.llm_adapter.get_settings")
+    def test_reasoning_effort_forwarded_when_set(self, mock_settings):
+        mock_settings.return_value = MagicMock(
+            llm_provider="cerebras",
+            llm_model="gpt-oss-120b",
+            llm_base_url="https://api.cerebras.ai/v1",
+            openai_api_key="",
+            cerebras_api_key="csk-test",
+        )
+        with patch("langchain_openai.ChatOpenAI") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            get_llm(temperature=0, max_tokens=512, reasoning_effort="low")
+            mock_cls.assert_called_once_with(
+                model="gpt-oss-120b",
+                temperature=0,
+                max_tokens=512,
+                reasoning_effort="low",
+                base_url="https://api.cerebras.ai/v1",
+                api_key="csk-test",
+            )
+
 
 class TestEmbeddingAdapter:
     def setup_method(self):

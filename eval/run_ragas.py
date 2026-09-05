@@ -58,7 +58,9 @@ def _answer_and_contexts(question: str, mode: str) -> tuple[str, list[str]]:
     contexts = [c for c in docs.split("\n\n") if c.strip()] or [""]
 
     prompt = build_answer_prompt(summary="", history="", docs=docs, question=question, lang="English", chat_mode=mode)
-    answer = get_llm(temperature=0, max_tokens=512).invoke(prompt).content
+    # reasoning_effort=low keeps reasoning tokens from eating the 512-token budget on
+    # reasoning models (e.g. gpt-oss-120b on Cerebras).
+    answer = get_llm(temperature=0, max_tokens=512, reasoning_effort="low").invoke(prompt).content
     return answer, contexts
 
 

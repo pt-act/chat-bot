@@ -31,7 +31,7 @@ OPENAI_COMPATIBLE = {
 
 
 @lru_cache
-def get_llm(temperature: float = 0, max_tokens: int = 1000):
+def get_llm(temperature: float = 0, max_tokens: int = 1000, reasoning_effort: str | None = None):
     setting = get_settings()
     provider = PROVIDER_ALIASES.get(setting.llm_provider.lower(), setting.llm_provider.lower())
     model = setting.llm_model
@@ -46,6 +46,10 @@ def get_llm(temperature: float = 0, max_tokens: int = 1000):
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        # Reasoning models (e.g. gpt-oss) spend completion tokens on reasoning; without
+        # an explicit effort, medium-effort reasoning can exhaust small max_tokens budgets.
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
 
         provider_keys = {
             "cerebras": getattr(setting, "cerebras_api_key", ""),
