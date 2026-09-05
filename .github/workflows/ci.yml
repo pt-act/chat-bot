@@ -55,7 +55,10 @@ jobs:
           python-version: "3.10"
 
       - name: Install ruff
-        run: pip install ruff
+        # Keep in sync with requirements-dev.txt. Unpinned ruff drifted to 0.16.x,
+        # which also formats Python code blocks inside Markdown docs — that failed
+        # on committed audit reports (e.g. docs/audit/reports/ui_ux_improvement_spec.md).
+        run: pip install ruff==0.15.16
 
       - name: Ruff check
         run: ruff check .
@@ -89,7 +92,7 @@ jobs:
     env:
       CEREBRAS_API_KEY: test-key-for-ci
       LLM_PROVIDER: cerebras
-      LLM_MODEL: zai-glm-4.7
+      LLM_MODEL: gpt-oss-120b
       LLM_BASE_URL: https://api.cerebras.ai/v1
       EMBEDDING_PROVIDER: fastembed
       EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
